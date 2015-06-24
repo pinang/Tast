@@ -1,4 +1,6 @@
-﻿using SqlFu;
+﻿using MySql.Data.MySqlClient;
+using NLog;
+using nZAI.Database;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,6 +13,8 @@ namespace Tast.BusinessLogic.Index
 {
 	public class TurtleIndexManager
 	{
+		private static Logger logger = LogManager.GetCurrentClassLogger();
+
 		/// <summary>
 		/// 指数值
 		/// </summary>
@@ -74,15 +78,14 @@ namespace Tast.BusinessLogic.Index
 				//	查询
 				var key = code + peroid.ToString();
 
-				using (var db = SqlFuDao.GetConnection())
-				{
-					AllIndexs[key] = db.Query<TurtleIndex>(i => i.Code == code && i.Peroid == peroid).ToDictionary(i => i.Date);
-
-					db.Close();
-				}
+				AllIndexs[key] = DBO.Query<TurtleIndex>("SELECT * FROM TurtleIndex WHERE Code = @Code AND Peroid = @Peroid",
+					new MySqlParameter("@Code", code),
+					new MySqlParameter("@Peroid", peroid))
+					.ToDictionary(i => i.Date);
 			}
 			catch (Exception ex)
 			{
+				logger.Error<Exception>(ex);
 				result = Result.Create(ex);
 			}
 
@@ -96,36 +99,42 @@ namespace Tast.BusinessLogic.Index
 		/// <returns></returns>
 		private static Result Save(string code, int peroid)
 		{
+			MySqlTransaction dbts = null;
 			var result = Result.OK;
 			try
 			{
 				var key = code + peroid.ToString();
 				var list = AllIndexs[key].Values.ToArray();
 
-				using (var db = SqlFuDao.GetConnection())
+				using (var conn = DBO.GetConnection())
 				{
+					conn.Open();
+
 					//	启动事务
-					using (var dbts = db.BeginTransaction())
+					using (dbts = conn.BeginTransaction())
 					{
 						//	先删除原有记录
-						db.DeleteFrom<TurtleIndex>(i => i.Code == code && i.Peroid == peroid);
+						DBO.ExecuteNonQuery("DELETE FROM TurtleIndex WHERE Code = @Code AND Peroid = @Peroid", conn,
+							new MySqlParameter("@Code", code),
+							new MySqlParameter("@Peroid", peroid));
 
 						//	新增新记录
-						foreach (var index in list)
-						{
-							db.Insert<TurtleIndex>(index);
-						}
+						if (!DBO.BatchInsert<TurtleIndex>(list, conn))
+							throw new Exception("新增记录时发生错误");
 
 						//	提交
 						dbts.Commit();
 					}
 
-					db.Close();
+					conn.Close();
 				}
 			}
 			catch (Exception ex)
 			{
+				logger.Error<Exception>(ex);
 				result = Result.Create(ex);
+				if (dbts != null)
+					dbts.Rollback();
 			}
 
 			return result;
@@ -161,6 +170,7 @@ namespace Tast.BusinessLogic.Index
 			}
 			catch (Exception ex)
 			{
+				logger.Error<Exception>(ex);
 				result = Result.Create(ex);
 			}
 

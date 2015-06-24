@@ -1,5 +1,6 @@
-﻿using NLog;
-using SqlFu;
+﻿using MySql.Data.MySqlClient;
+using NLog;
+using nZAI.Database;
 using System;
 using System.Collections.Generic;
 using System.Data.Common;
@@ -45,21 +46,15 @@ namespace Tast.BusinessLogic.TradingSystem
 			{
 				logger.Info("海龟交易系统初始化开始");
 
-				List<TurtleTradingSystem> systems = null;
-				using (var db = SqlFuDao.GetConnection())
+				var systems = DBO.Query<TurtleTradingSystem>("SELECT * FROM TurtleTradingSystem WHERE Enable = 1 ORDER BY Code");
+				if (systems == null || systems.Count == 0)
 				{
-					systems = db.Query<TurtleTradingSystem>(s => s.Enable).ToList();
-					if (systems == null || systems.Count == 0)
-					{
-						//	增加默认的设置
-						var defaultSystem = AddDefault(db);
-						if (defaultSystem == null)
-							throw new Exception("初始化海龟交易系统出错");
+					//	增加默认的设置
+					var defaultSystem = AddDefault();
+					if (defaultSystem == null)
+						throw new Exception("初始化海龟交易系统出错");
 
-						systems.Add(defaultSystem);
-					}
-
-					db.Close();
+					systems.Add(defaultSystem);
 				}
 
 				System.Threading.Tasks.Task.Factory.StartNew(() =>
@@ -84,7 +79,7 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// </summary>
 		/// <param name="db"></param>
 		/// <returns></returns>
-		private static TurtleTradingSystem AddDefault(DbConnection db)
+		private static TurtleTradingSystem AddDefault()
 		{
 			TurtleTradingSystem result = null;
 			try
@@ -119,20 +114,20 @@ namespace Tast.BusinessLogic.TradingSystem
 					BestEnter = 2,
 					BestExit = 2,
 					BestStop = 2,
-					BestProfit = decimal.MinValue,
+					BestProfit = -100000m,
 					BestProfitPercent = 0m,
 					Enable = true,
 					TotalAmount = 0,
 					FinishedAmount = 0,
+					PassedSeconds = 0,
 					RemainTips = string.Empty
 				};
 
 				//	获取这一区间段的股票历史记录数
-				var historyCount = db.WithSql("SELECT COUNT(0) FROM StockHistory WHERE Code = @0 AND Date >= @1 AND Date <= @2", 
-					result.Code, 
-					result.StartDate, 
-					result.EndDate)
-					.QuerySingle<int>();
+				var historyCount = DBO.QueryScalar<long>("SELECT COUNT(0) FROM StockHistory WHERE Code = @Code AND Date >= @StartDate AND Date <= @EndDate",
+					new MySqlParameter("@Code", result.Code),
+					new MySqlParameter("@StartDate", result.StartDate),
+					new MySqlParameter("@EndDate", result.EndDate));
 
 				result.TotalAmount = (result.EndHolding - result.StartHolding + 1) *
 					(result.EndN - result.StartN + 1) *
@@ -141,7 +136,7 @@ namespace Tast.BusinessLogic.TradingSystem
 					historyCount;
 
 				//	保存
-				db.Insert<TurtleTradingSystem>(result);
+				DBO.Insert<TurtleTradingSystem>(result);
 			}
 			catch (Exception ex)
 			{
@@ -163,24 +158,24 @@ namespace Tast.BusinessLogic.TradingSystem
 				TestTrends = new List<TurtleTradingSystemTrend>();
 				TestHoldings = new List<TurtleTradingSystemHolding>();
 
-				//var collectionSystem = db.GetCollection<TurtleTradingSystem>("TurtleTradingSystem");
-				//var collectionTest = db.GetCollection<TurtleTradingSystemTest>("TurtleTradingSystemTest");
-				//var collectionTrend = db.GetCollection<TurtleTradingSystemTrend>("TurtleTradingSystemTrend");
-				//var collectionHolding = db.GetCollection<TurtleTradingSystemHolding>("TurtleTradingSystemHolding");
-
-				using (var db = SqlFuDao.GetConnection())
+				using (var conn = DBO.GetConnection())
 				{
-					var histories = db.Query<StockHistory>(h => h.Code == system.Code && h.Date.CompareTo(system.StartDate) >= 0 && h.Date.CompareTo(system.EndDate) <= 0).ToList();
+					conn.Open();
+
+					var histories = DBO.Query<StockHistory>("SELECT * FROM StockHistory WHERE Code = @Code AND Date >= @StartDate AND Date <= @EndDate ORDER BY Date",
+						new MySqlParameter("@Code", system.Code),
+						new MySqlParameter("@StartDate", system.StartDate),
+						new MySqlParameter("@EndDate", system.EndDate));
 					if (histories.Count == 0)
 						throw new Exception("没有符合查询条件的历史股价");
 
 					Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dictPeroidExtermaIndex;
-					var result = PreparePeroidExtermaIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, db, out dictPeroidExtermaIndex);
+					var result = PreparePeroidExtermaIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, conn, out dictPeroidExtermaIndex);
 					if (!result.Success)
 						throw new Exception("查询区间极值指标出错");
 
 					Dictionary<int, Dictionary<string, TurtleIndex>> dictTurtleIndex;
-					result = PrepareTurtleIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, db, out dictTurtleIndex);
+					result = PrepareTurtleIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, conn, out dictTurtleIndex);
 					if (!result.Success)
 						throw new Exception("查询海龟指标出错");
 
@@ -217,27 +212,14 @@ namespace Tast.BusinessLogic.TradingSystem
 						result = Result.OK;
 						foreach (var history in histories)
 						{
-							////	获取前一天设定下的指标
-							//result = TurtleIndexManager.Get(system.Code, test.N, history.PrevDate, out ti);
-							//if (!result.Success)
-							//	throw new Exception("获取TurtleIndex出错, peroid:" + test.N + " date:" + history.Date);
+							//if (!ti.ContainsKey(history.PrevDate))
+							//	throw new Exception("ti:" + history.PrevDate);
 
-							//result = PeroidExtermaIndexManager.Get(system.Code, test.Enter, history.PrevDate, out peiEnter);
-							//if (!result.Success)
-							//	throw new Exception("获取PeroidExtermaIndex出错, peroid:" + test.Enter + " date:" + history.Date);
+							//if (!pein.ContainsKey(history.PrevDate))
+							//	throw new Exception("pein:" + history.PrevDate);
 
-							//result = PeroidExtermaIndexManager.Get(system.Code, test.Exit, history.PrevDate, out peiExit);
-							//if (!result.Success)
-							//	throw new Exception("获取PeroidExtermaIndex出错, peroid:" + test.Exit + " date:" + history.Date);
-
-							if (!ti.ContainsKey(history.PrevDate))
-								throw new Exception("ti:" + history.PrevDate);
-
-							if (!pein.ContainsKey(history.PrevDate))
-								throw new Exception("pein:" + history.PrevDate);
-
-							if (!peix.ContainsKey(history.PrevDate))
-								throw new Exception("peix:" + history.PrevDate);
+							//if (!peix.ContainsKey(history.PrevDate))
+							//	throw new Exception("peix:" + history.PrevDate);
 
 							//	模拟
 							result = SimulateDay(test,
@@ -264,13 +246,12 @@ namespace Tast.BusinessLogic.TradingSystem
 
 						//	计算利润
 						test.Profit = test.EndAmount - test.StartAmount;
-						test.ProfitPercent = test.StartAmount == 0 ? 0m : test.Profit / test.StartAmount;
+						test.ProfitPercent = test.StartAmount == 0 ? 0m : test.EndAmount / test.StartAmount;
 						system.CurrentProfit = test.Profit;
 						system.CurrentProfitPercent = test.ProfitPercent;
 						system.FinishedAmount++;
 
 						update = false;
-						var tasks = new List<System.Threading.Tasks.Task>();
 
 						//	判断是否达成利润率新高
 						if (test.Profit > system.BestProfit)
@@ -291,26 +272,22 @@ namespace Tast.BusinessLogic.TradingSystem
 								system.BestExit,
 								system.BestStop);
 
-							
 							//	只有突破原有记录时才记录明细
-							db.Insert<TurtleTradingSystemTest>(test);
+							if (!DBO.Insert<TurtleTradingSystemTest>(test, conn))
+								throw new Exception("保存TurtleTradingSystemTest发生错误");
 
-							foreach (var trend in TestTrends)
-							{
-								db.Insert<TurtleTradingSystemTrend>(trend);
-							}
+							if (!DBO.BatchInsert<TurtleTradingSystemTrend>(TestTrends, conn))
+								throw new Exception("保存TurtleTradingSystemTrend发生错误");
 
-							foreach (var holding in TestHoldings)
-							{
-								db.Insert<TurtleTradingSystemHolding>(holding);
-							}
+							if (!DBO.BatchInsert<TurtleTradingSystemHolding>(TestHoldings, conn))
+								throw new Exception("保存TurtleTradingSystemHolding发生错误");
 
 							update = true;
 						}
 
-						if (system.FinishedAmount % 1024 == 0)
+						if (system.FinishedAmount % 10240 == 0)
 						{
-							var elapsedSeconds = sw.Elapsed.TotalSeconds;
+							var elapsedSeconds = sw.Elapsed.TotalSeconds + system.PassedSeconds;
 							var totalSeconds = elapsedSeconds * ((double)system.TotalAmount / system.FinishedAmount);
 							var remainSeconds = totalSeconds - elapsedSeconds;
 							var ts = TimeSpan.FromSeconds(remainSeconds);
@@ -323,19 +300,15 @@ namespace Tast.BusinessLogic.TradingSystem
 						if (update)
 						{
 							//	保存演算结果
-							db.Update<TurtleTradingSystem>(system, system.SystemId);
-						}
-
-						if (tasks.Count > 0)
-						{
-							System.Threading.Tasks.Task.WaitAll(tasks.ToArray());
+							if (!DBO.Update<TurtleTradingSystem>(system, conn))
+								throw new Exception("保存TurtleTradingSystem发生错误");
 						}
 
 						TestTrends.Clear();
 						TestHoldings.Clear();
 					}
 
-					db.Close();
+					conn.Close();
 				}
 
 				logger.Info("演算结束");
@@ -352,10 +325,10 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// <param name="system"></param>
 		/// <param name="startDate"></param>
 		/// <param name="endDate"></param>
-		/// <param name="db"></param>
+		/// <param name="conn"></param>
 		/// <param name="dict"></param>
 		/// <returns></returns>
-		private static Result PreparePeroidExtermaIndex(TurtleTradingSystem system, string startDate, string endDate, DbConnection db, out Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dict)
+		private static Result PreparePeroidExtermaIndex(TurtleTradingSystem system, string startDate, string endDate, DbConnection conn, out Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dict)
 		{
 			dict = null;
 			var result = Result.OK;
@@ -367,16 +340,16 @@ namespace Tast.BusinessLogic.TradingSystem
 				PeroidExtermaIndex pei;
 				for (var index = min; index <= max; index++)
 				{
-					PeroidExtermaIndexManager.Get(system.Code, index, startDate, out pei);
+					result = PeroidExtermaIndexManager.Get(system.Code, index, startDate, out pei);
+					if (!result.Success) return result;
 				}
 
-				var indexes = db.WithSql("SELECT * FROM PeroidExtermaIndex WHERE Code = @0 AND Date >= @1 AND Date <= @2 AND Peroid >= @3 AND Peroid <= @4",
-					system.Code,
-					startDate,
-					endDate,
-					system.StartN,
-					system.EndN)
-					.Query<PeroidExtermaIndex>().ToList();
+				var indexes = DBO.Query<PeroidExtermaIndex>("SELECT * FROM PeroidExtermaIndex WHERE Code = @Code AND Date >= @StartDate AND Date <= @EndDate AND Peroid >= @PeroidMin AND Peroid <= @PeroidMax",
+					new MySqlParameter("@Code", system.Code),
+					new MySqlParameter("@StartDate", startDate),
+					new MySqlParameter("@EndDate", endDate),
+					new MySqlParameter("@PeroidMin", system.StartN),
+					new MySqlParameter("@PeroidMax", system.EndN));
 
 				dict = new Dictionary<int, Dictionary<string, PeroidExtermaIndex>>();
 				for (var index = min; index <= max; index++)
@@ -408,8 +381,6 @@ namespace Tast.BusinessLogic.TradingSystem
 			var result = Result.OK;
 			try
 			{
-				logger.Info("start:{0} end:{1} min:{2} max:{3}", startDate, endDate, system.StartN, system.EndN);
-
 				TurtleIndex ti;
 				for (var index = system.StartN; index <= system.EndN; index++)
 				{
@@ -417,17 +388,13 @@ namespace Tast.BusinessLogic.TradingSystem
 					if (!result.Success) return result;
 				}
 
-				var indexes = db.WithSql("SELECT * FROM TurtleIndex WHERE Code = @0 AND Date >= @1 AND Date <= @2 AND Peroid >= @3 AND Peroid <= @4",
-					system.Code,
-					startDate,
-					endDate,
-					system.StartN,
-					system.EndN)
-					.Query<TurtleIndex>().ToList();
-
-				if (!indexes.Exists(i => i.Date == startDate && i.Peroid == 2))
-					throw new Exception("not exists");
-
+				var indexes = DBO.Query<TurtleIndex>("SELECT * FROM TurtleIndex WHERE Code = @Code AND Date >= @StartDate AND Date <= @EndDate AND Peroid >= @PeroidMin AND Peroid <= @PeroidMax",
+					new MySqlParameter("@Code", system.Code),
+					new MySqlParameter("@StartDate", startDate),
+					new MySqlParameter("@EndDate", endDate),
+					new MySqlParameter("@PeroidMin", system.StartN),
+					new MySqlParameter("@PeroidMax", system.EndN));
+				
 				dict = new Dictionary<int, Dictionary<string, TurtleIndex>>();
 				for (var index = system.StartN; index <= system.EndN; index++)
 				{

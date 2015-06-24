@@ -1,8 +1,7 @@
 ﻿using NLog;
-using SqlFu;
+using nZAI.Database;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Tast.BusinessLogic.Stock
 {
@@ -15,12 +14,7 @@ namespace Tast.BusinessLogic.Stock
 			List<Tast.Entities.Stock.Stock> result = null;
 			try
 			{
-				using (var db = SqlFuDao.GetConnection())
-				{
-					result = db.Query<Tast.Entities.Stock.Stock>(s => s.Enable).ToList();
-
-					db.Close();
-				}
+				result = DBO.Query<Tast.Entities.Stock.Stock>("SELECT * FROM Stock WHERE Enable = 1 ORDER BY Code");
 			}
 			catch (Exception ex)
 			{
@@ -34,12 +28,7 @@ namespace Tast.BusinessLogic.Stock
 		{
 			try
 			{
-				using (var db = SqlFuDao.GetConnection())
-				{
-					db.Insert(stock);
-
-					db.Close();
-				}
+				DBO.Insert<Tast.Entities.Stock.Stock>(stock);
 			}
 			catch (Exception ex)
 			{

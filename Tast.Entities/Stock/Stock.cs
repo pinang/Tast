@@ -1,11 +1,11 @@
-﻿using SqlFu;
+﻿using nZAI.Database.Attributes;
 
 namespace Tast.Entities.Stock
 {
 	/// <summary>
 	/// 股票
 	/// </summary>
-	[Table("Stock", PrimaryKey = "Code")]
+	[DbTable(TableName = "Stock", PrimaryKey = "Code")]
 	public class Stock
 	{
 		/// <summary>

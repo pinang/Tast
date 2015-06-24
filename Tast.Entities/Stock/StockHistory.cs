@@ -1,11 +1,11 @@
-﻿using SqlFu;
+﻿using nZAI.Database.Attributes;
 
 namespace Tast.Entities.Stock
 {
 	/// <summary>
 	/// 股票历史
 	/// </summary>
-	[Table("StockHistory", PrimaryKey = "HistoryId")]
+	[DbTable(TableName = "StockHistory", PrimaryKey = "HistoryId")]
 	public class StockHistory
 	{
 		/// <summary>
@@ -16,6 +16,7 @@ namespace Tast.Entities.Stock
 		/// <summary>
 		/// 前一天编号
 		/// </summary>
+		[DbColumn(Nullable = true)]
 		public string PrevHistoryId { get; set; }
 
 		/// <summary>
@@ -31,6 +32,7 @@ namespace Tast.Entities.Stock
 		/// <summary>
 		/// 日期
 		/// </summary>
+		[DbColumn(Nullable = true)]
 		public string PrevDate { get; set; }
 
 		/// <summary>

@@ -1,4 +1,5 @@
-﻿using SqlFu;
+﻿using MySql.Data.MySqlClient;
+using nZAI.Database;
 using System.Configuration;
 
 namespace Tast.BusinessLogic.Database
@@ -7,7 +8,8 @@ namespace Tast.BusinessLogic.Database
 	{
 		public static void InitDatabaseConnection()
 		{
-			SqlFuDao.ConnectionStringIs(ConfigurationManager.ConnectionStrings["tast"].ConnectionString, DbEngine.MySql);
+			var connectionString = ConfigurationManager.ConnectionStrings["tast"].ConnectionString;
+			DBO.RegisterConn(SupportDatabaseType.MySql, () => { return new MySqlConnection(connectionString); });
 		}
 	}
 }

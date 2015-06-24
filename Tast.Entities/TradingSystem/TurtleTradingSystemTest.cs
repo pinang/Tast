@@ -1,8 +1,8 @@
-﻿using SqlFu;
+﻿using nZAI.Database.Attributes;
 
 namespace Tast.Entities.TradingSystem
 {
-	[Table("TurtleTradingSystemTest", PrimaryKey = "TestId")]
+	[DbTable(TableName = "TurtleTradingSystemTest", PrimaryKey = "TestId")]
 	public class TurtleTradingSystemTest
 	{
 		/// <summary>

@@ -1,8 +1,8 @@
-﻿using SqlFu;
+﻿using nZAI.Database.Attributes;
 
 namespace Tast.Entities.TradingSystem
 {
-	[Table("TurtleTradingSystem", PrimaryKey = "SystemId")]
+	[DbTable(TableName = "TurtleTradingSystem", PrimaryKey = "SystemId")]
 	public class TurtleTradingSystem
 	{
 		/// <summary>
@@ -169,6 +169,11 @@ namespace Tast.Entities.TradingSystem
 		/// 已完成计算量
 		/// </summary>
 		public long FinishedAmount { get; set; }
+
+		/// <summary>
+		/// 已经运行的时间
+		/// </summary>
+		public long PassedSeconds { get; set; }
 
 		/// <summary>
 		/// 剩余时间提示

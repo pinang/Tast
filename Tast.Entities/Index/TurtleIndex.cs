@@ -1,4 +1,4 @@
-﻿using SqlFu;
+﻿using nZAI.Database.Attributes;
 using System;
 
 namespace Tast.Entities.Index
@@ -7,7 +7,7 @@ namespace Tast.Entities.Index
 	/// <summary>
 	/// 指标-海龟波动性
 	/// </summary>
-	[Table("TurtleIndex", PrimaryKey = "IndexId")]
+	[DbTable(TableName = "TurtleIndex", PrimaryKey = "IndexId")]
 	public class TurtleIndex
 	{
 		/// <summary>

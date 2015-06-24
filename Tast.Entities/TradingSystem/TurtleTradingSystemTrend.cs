@@ -1,11 +1,11 @@
-﻿using SqlFu;
+﻿using nZAI.Database.Attributes;
 
 namespace Tast.Entities.TradingSystem
 {
 	/// <summary>
 	/// 海龟交易系统趋势
 	/// </summary>
-	[Table("TurtleTradingSystemTrend", PrimaryKey = "TrendId")]
+	[DbTable(TableName = "TurtleTradingSystemTrend", PrimaryKey = "TrendId")]
 	public class TurtleTradingSystemTrend
 	{
 		/// <summary>

@@ -1,9 +1,9 @@
-﻿using NLog;
-using SqlFu;
+﻿using MySql.Data.MySqlClient;
+using NLog;
+using nZAI.Database;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -57,12 +57,7 @@ namespace Tast.BusinessLogic.Stock
 			var result = Result.OK;
 			try
 			{
-				using (var db = SqlFuDao.GetConnection())
-				{
-					AllHistories[code] = db.Query<StockHistory>(i => i.Code == code).OrderBy(i => i.Date).ToArray();
-
-					db.Close();
-				}
+				AllHistories[code] = DBO.Query<StockHistory>("SELECT * FROM StockHistory WHERE Code = @Code ORDER BY Date", new MySqlParameter("@Code", code)).ToArray();
 			}
 			catch (Exception ex)
 			{
@@ -80,10 +75,12 @@ namespace Tast.BusinessLogic.Stock
 				logger.Info("开始更新股票历史");
 
 				List<Tast.Entities.Stock.Stock> stocks;
-				using (var db = SqlFuDao.GetConnection())
+				using (var conn = DBO.GetConnection())
 				{
+					conn.Open();
+
 					var today = DateTime.Today.ToString("yyyyMMdd");
-					stocks = db.Query<Tast.Entities.Stock.Stock>(s => s.Enable && s.LastHistoryDate != today).ToList();
+					stocks = DBO.Query<Tast.Entities.Stock.Stock>("SELECT * FROM Stock WHERE Enable = 1 AND LastHistoryDate <> @Date ORDER BY Code", conn, new MySqlParameter("@Date", today));
 
 					var loopResult = Parallel.ForEach<Tast.Entities.Stock.Stock>(stocks, new ParallelOptions { MaxDegreeOfParallelism = 4 }, stock =>
 					{
@@ -92,7 +89,8 @@ namespace Tast.BusinessLogic.Stock
 						{
 							//	更新股票最后更新日期
 							stock.LastHistoryDate = today;
-							db.Update<Tast.Entities.Stock.Stock>(stock, stock.Code);
+							if (!DBO.Update<Tast.Entities.Stock.Stock>(stock))
+								throw new Exception("更新最后更新时间时发生错误");
 						}
 						else
 						{
@@ -109,7 +107,7 @@ namespace Tast.BusinessLogic.Stock
 						logger.Info("股票历史更新失败");
 					}
 
-					db.Close();
+					conn.Close();
 				}
 			}
 			catch (Exception ex)
@@ -123,6 +121,7 @@ namespace Tast.BusinessLogic.Stock
 
 		public static Result RefreshStockHistory(string code)
 		{
+			MySqlTransaction dbts = null;
 			var result = Result.OK;
 			try
 			{
@@ -168,25 +167,26 @@ namespace Tast.BusinessLogic.Stock
 								list[index].PrevHistoryId = list[index + 1].HistoryId;
 								list[index].PrevDate = list[index + 1].Date;
 							}
-							using (var db = SqlFuDao.GetConnection())
+
+							using (var conn = DBO.GetConnection())
 							{
+								conn.Open();
+
 								//	启动事务
-								using (var dbts = db.BeginTransaction())
+								using (dbts = conn.BeginTransaction())
 								{
 									//	先删除原有记录
-									db.DeleteFrom<StockHistory>(s => s.Code == code);
+									DBO.ExecuteNonQuery("DELETE FROM StockHistory WHERE Code = @Code", conn, new MySqlParameter("@Code", code));
 
-									//	再新增新的数据
-									foreach (var item in list)
-									{
-										db.Insert<StockHistory>(item);
-									}
+									//	新增新记录
+									if (!DBO.BatchInsert<StockHistory>(list, conn))
+										throw new Exception("新增记录时发生错误");
 
 									//	提交
 									dbts.Commit();
 								}
 
-								db.Close();
+								conn.Close();
 							}
 						}
 					}
@@ -196,6 +196,8 @@ namespace Tast.BusinessLogic.Stock
 			{
 				logger.Error<Exception>(ex);
 				result = Result.Create(ex);
+				if (dbts != null)
+					dbts.Rollback();
 			}
 
 			return result;

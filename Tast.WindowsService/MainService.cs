@@ -32,16 +32,16 @@ namespace Tast.WindowsService
 				//	logger.Info("Code:{0} ChineseName:{1}", stock.Code, stock.ChineseName);
 				//}
 
+				//	初始化数据库连接
+				DatabaseManager.InitDatabaseConnection();
+
 				//Task.Factory.StartNew(() =>
 				//{
 				//	StockHistoryManager.RefreshAllStockHistory();
 				//});
 
-				//	初始化数据库连接
-				DatabaseManager.InitDatabaseConnection();
-
 				//	初始化计划任务
-				TaskScheduleManager.TaskScheduleInit();
+				//TaskScheduleManager.TaskScheduleInit();
 
 				//	初始化海龟交易演算系统
 				TurtleTradingSystemManager.SystemVerificationInit();

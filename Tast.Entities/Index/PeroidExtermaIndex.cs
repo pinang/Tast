@@ -1,4 +1,4 @@
-﻿using SqlFu;
+﻿using nZAI.Database.Attributes;
 
 namespace Tast.Entities.Index
 {
@@ -6,7 +6,7 @@ namespace Tast.Entities.Index
 	/// <summary>
 	/// 指标-区间极值
 	/// </summary>
-	[Table("PeroidExtermaIndex", PrimaryKey = "IndexId")]
+	[DbTable(TableName = "PeroidExtermaIndex", PrimaryKey = "IndexId")]
 	public class PeroidExtermaIndex
 	{
 		/// <summary>
