@@ -1,18 +1,16 @@
-﻿using MongoDB.Bson;
-using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
+﻿using SqlFu;
 
 namespace Tast.Entities.Stock
 {
 	/// <summary>
 	/// 股票历史
 	/// </summary>
+	[Table("StockHistory", PrimaryKey = "HistoryId")]
 	public class StockHistory
 	{
 		/// <summary>
 		/// 编号
 		/// </summary>
-		[BsonId(IdGenerator = typeof(StringObjectIdGenerator))]
 		public string HistoryId { get; set; }
 
 		/// <summary>
@@ -38,31 +36,26 @@ namespace Tast.Entities.Stock
 		/// <summary>
 		/// 开盘价
 		/// </summary>
-		[BsonRepresentation(BsonType.Double)]
 		public decimal Open { get; set; }
 
 		/// <summary>
 		/// 最高价
 		/// </summary>
-		[BsonRepresentation(BsonType.Double)]
 		public decimal High { get; set; }
 
 		/// <summary>
 		/// 最低价
 		/// </summary>
-		[BsonRepresentation(BsonType.Double)]
 		public decimal Low { get; set; }
 
 		/// <summary>
 		/// 收盘价
 		/// </summary>
-		[BsonRepresentation(BsonType.Double)]
 		public decimal Close { get; set; }
 
 		/// <summary>
 		/// 交易量
 		/// </summary>
-		[BsonRepresentation(BsonType.Int64)]
 		public long Volume { get; set; }
 	}
 }

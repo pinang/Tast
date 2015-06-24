@@ -1,13 +1,13 @@
-﻿using MongoDB.Driver;
-using NLog;
+﻿using NLog;
+using SqlFu;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using Tast.BusinessLogic.MongoDB;
 using Tast.Entities;
 using Tast.Entities.Stock;
 
@@ -57,13 +57,12 @@ namespace Tast.BusinessLogic.Stock
 			var result = Result.OK;
 			try
 			{
-				var db = MongoDBManager.GetDatabaseInstance();
-				var collection = db.GetCollection<StockHistory>("StockHistory");
-				var task = collection.Find(i => i.Code == code).SortBy(i => i.Date).ToListAsync();
-				task.Wait();
+				using (var db = SqlFuDao.GetConnection())
+				{
+					AllHistories[code] = db.Query<StockHistory>(i => i.Code == code).OrderBy(i => i.Date).ToArray();
 
-				//	查询
-				AllHistories[code] = task.Result.ToArray();
+					db.Close();
+				}
 			}
 			catch (Exception ex)
 			{
@@ -80,40 +79,37 @@ namespace Tast.BusinessLogic.Stock
 			{
 				logger.Info("开始更新股票历史");
 
-				var db = MongoDBManager.GetDatabaseInstance();
-				var collection = db.GetCollection<Tast.Entities.Stock.Stock>("Stock");
-
-				//	查找未更新的股票
-				var today = DateTime.Today.ToString("yyyyMMdd");
-				var task = collection.Find(s => s.Enable && s.LastHistoryDate != today).ToListAsync();
-				task.Wait();
-
-				var stocks = task.Result;
-
-				var loopResult = Parallel.ForEach<Tast.Entities.Stock.Stock>(stocks, new ParallelOptions { MaxDegreeOfParallelism = 4 }, stock =>
+				List<Tast.Entities.Stock.Stock> stocks;
+				using (var db = SqlFuDao.GetConnection())
 				{
-					var ret = RefreshStockHistory(stock.Code);
-					if (ret.Success)
+					var today = DateTime.Today.ToString("yyyyMMdd");
+					stocks = db.Query<Tast.Entities.Stock.Stock>(s => s.Enable && s.LastHistoryDate != today).ToList();
+
+					var loopResult = Parallel.ForEach<Tast.Entities.Stock.Stock>(stocks, new ParallelOptions { MaxDegreeOfParallelism = 4 }, stock =>
 					{
-						//	更新股票最后更新日期
-						 collection.UpdateOneAsync(
-							Builders<Tast.Entities.Stock.Stock>.Filter.Eq(s => s.Code, stock.Code),
-							Builders<Tast.Entities.Stock.Stock>.Update.Set(s => s.LastHistoryDate, today)
-						).Wait();
+						var ret = RefreshStockHistory(stock.Code);
+						if (ret.Success)
+						{
+							//	更新股票最后更新日期
+							stock.LastHistoryDate = today;
+							db.Update<Tast.Entities.Stock.Stock>(stock, stock.Code);
+						}
+						else
+						{
+							logger.Error(ret.Message);
+						}
+					});
+
+					if (loopResult.IsCompleted)
+					{
+						logger.Info("股票历史更新成功");
 					}
 					else
 					{
-						logger.Error(ret.Message);
+						logger.Info("股票历史更新失败");
 					}
-				});
 
-				if (loopResult.IsCompleted)
-				{
-					logger.Info("股票历史更新成功");
-				}
-				else
-				{
-					logger.Info("股票历史更新失败");
+					db.Close();
 				}
 			}
 			catch (Exception ex)
@@ -172,15 +168,26 @@ namespace Tast.BusinessLogic.Stock
 								list[index].PrevHistoryId = list[index + 1].HistoryId;
 								list[index].PrevDate = list[index + 1].Date;
 							}
+							using (var db = SqlFuDao.GetConnection())
+							{
+								//	启动事务
+								using (var dbts = db.BeginTransaction())
+								{
+									//	先删除原有记录
+									db.DeleteFrom<StockHistory>(s => s.Code == code);
 
-							var db = MongoDBManager.GetDatabaseInstance();
-							var collection = db.GetCollection<StockHistory>("StockHistory");
+									//	再新增新的数据
+									foreach (var item in list)
+									{
+										db.Insert<StockHistory>(item);
+									}
 
-							//	先删除原有数据
-							collection.DeleteManyAsync(Builders<StockHistory>.Filter.Eq(s => s.Code, code)).Wait();
+									//	提交
+									dbts.Commit();
+								}
 
-							//	再新增新的数据
-							collection.InsertManyAsync(list).Wait();
+								db.Close();
+							}
 						}
 					}
 				}

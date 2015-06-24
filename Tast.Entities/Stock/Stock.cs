@@ -1,18 +1,16 @@
-﻿using MongoDB.Bson;
-using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
+﻿using SqlFu;
 
 namespace Tast.Entities.Stock
 {
 	/// <summary>
 	/// 股票
 	/// </summary>
+	[Table("Stock", PrimaryKey = "Code")]
 	public class Stock
 	{
 		/// <summary>
 		/// 股票编号
 		/// </summary>
-		[BsonId(IdGenerator = typeof(StringObjectIdGenerator))]
 		public string Code { get; set; }
 
 		/// <summary>

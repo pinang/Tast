@@ -1,8 +1,8 @@
-﻿using MongoDB.Driver;
-using NLog;
+﻿using NLog;
+using SqlFu;
 using System;
 using System.Collections.Generic;
-using Tast.BusinessLogic.MongoDB;
+using System.Linq;
 
 namespace Tast.BusinessLogic.Stock
 {
@@ -15,12 +15,12 @@ namespace Tast.BusinessLogic.Stock
 			List<Tast.Entities.Stock.Stock> result = null;
 			try
 			{
-				var db = MongoDBManager.GetDatabaseInstance();
-				var collection = db.GetCollection<Tast.Entities.Stock.Stock>("Stock");
-				var task = collection.Find(s => s.Enable).ToListAsync();
-				task.Wait();
+				using (var db = SqlFuDao.GetConnection())
+				{
+					result = db.Query<Tast.Entities.Stock.Stock>(s => s.Enable).ToList();
 
-				result = task.Result;
+					db.Close();
+				}
 			}
 			catch (Exception ex)
 			{
@@ -34,10 +34,12 @@ namespace Tast.BusinessLogic.Stock
 		{
 			try
 			{
-				var db = MongoDBManager.GetDatabaseInstance();
-				var collection = db.GetCollection<Tast.Entities.Stock.Stock>("Stock");
+				using (var db = SqlFuDao.GetConnection())
+				{
+					db.Insert(stock);
 
-				collection.InsertOneAsync(stock).Wait();
+					db.Close();
+				}
 			}
 			catch (Exception ex)
 			{

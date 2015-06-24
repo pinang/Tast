@@ -1,8 +1,7 @@
-﻿using MongoDB.Driver;
+﻿using SqlFu;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Tast.BusinessLogic.MongoDB;
 using Tast.BusinessLogic.Stock;
 using Tast.Entities;
 using Tast.Entities.Index;
@@ -76,12 +75,12 @@ namespace Tast.BusinessLogic.Index
 				//	查询
 				var key = code + peroid.ToString();
 
-				var database = MongoDBManager.GetDatabaseInstance();
-				var collection = database.GetCollection<PeroidExtermaIndex>("IndexPeroidExterma");
-				var task = collection.Find(i => i.Code == code && i.Peroid == peroid).ToListAsync();
-				task.Wait();
+				using (var db = SqlFuDao.GetConnection())
+				{
+					AllIndexs[key] = db.Query<PeroidExtermaIndex>(i => i.Code == code && i.Peroid == peroid).ToDictionary(i => i.Date);
 
-				AllIndexs[key] = task.Result.ToDictionary(i => i.Date);
+					db.Close();
+				}
 			}
 			catch (Exception ex)
 			{
@@ -105,14 +104,26 @@ namespace Tast.BusinessLogic.Index
 				var key = code + peroid.ToString();
 				var list = AllIndexs[key].Values.ToArray();
 
-				var database = MongoDBManager.GetDatabaseInstance();
-				var collection = database.GetCollection<PeroidExtermaIndex>("IndexPeroidExterma");
+				using (var db = SqlFuDao.GetConnection())
+				{
+					//	启动事务
+					using(var dbts = db.BeginTransaction())
+					{
+						//	先删除原有记录
+						db.DeleteFrom<PeroidExtermaIndex>(i => i.Code == code && i.Peroid == peroid);
 
-				//	先删除原有记录
-				collection.DeleteManyAsync(Builders<PeroidExtermaIndex>.Filter.Where(i => i.Code == code && i.Peroid == peroid)).Wait();
+						//	新增新记录
+						foreach (var index in list)
+						{
+							db.Insert<PeroidExtermaIndex>(index);
+						}
 
-				//	新增新记录
-				collection.InsertManyAsync(list).Wait();
+						//	提交
+						dbts.Commit();
+					}
+
+					db.Close();
+				}
 			}
 			catch (Exception ex)
 			{

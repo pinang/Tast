@@ -2,6 +2,7 @@
 using System;
 using System.ServiceProcess;
 using System.Threading.Tasks;
+using Tast.BusinessLogic.Database;
 using Tast.BusinessLogic.Stock;
 using Tast.BusinessLogic.Task;
 using Tast.BusinessLogic.TradingSystem;
@@ -35,6 +36,9 @@ namespace Tast.WindowsService
 				//{
 				//	StockHistoryManager.RefreshAllStockHistory();
 				//});
+
+				//	初始化数据库连接
+				DatabaseManager.InitDatabaseConnection();
 
 				//	初始化计划任务
 				TaskScheduleManager.TaskScheduleInit();

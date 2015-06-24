@@ -1,7 +1,4 @@
-﻿using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
-using System;
-using System.ComponentModel;
+﻿using SqlFu;
 
 namespace Tast.Entities.Index
 {
@@ -9,13 +6,12 @@ namespace Tast.Entities.Index
 	/// <summary>
 	/// 指标-区间极值
 	/// </summary>
-	[Serializable]
+	[Table("PeroidExtermaIndex", PrimaryKey = "IndexId")]
 	public class PeroidExtermaIndex
 	{
 		/// <summary>
 		/// 编号
 		/// </summary>
-		[BsonId(IdGenerator = typeof(StringObjectIdGenerator))]
 		public string IndexId { get; set; }
 
 		/// <summary>

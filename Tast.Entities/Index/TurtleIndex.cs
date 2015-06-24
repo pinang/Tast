@@ -1,7 +1,5 @@
-﻿using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
+﻿using SqlFu;
 using System;
-using System.ComponentModel;
 
 namespace Tast.Entities.Index
 {
@@ -9,17 +7,16 @@ namespace Tast.Entities.Index
 	/// <summary>
 	/// 指标-海龟波动性
 	/// </summary>
-	[Serializable]
+	[Table("TurtleIndex", PrimaryKey = "IndexId")]
 	public class TurtleIndex
 	{
 		/// <summary>
 		/// 编号
 		/// </summary>
-		[BsonId(IdGenerator = typeof(StringObjectIdGenerator))]
 		public string IndexId { get; set; }
 
 		/// <summary>
-		/// 趋势编号
+		/// 历史编号
 		/// </summary>
 		public string HistoryId { get; set; }
 

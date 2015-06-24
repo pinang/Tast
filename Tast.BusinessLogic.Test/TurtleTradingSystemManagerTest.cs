@@ -1,9 +1,4 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using Tast.BusinessLogic.TradingSystem;
 
 namespace Tast.BusinessLogic.Test
@@ -15,6 +10,8 @@ namespace Tast.BusinessLogic.Test
 		public void TestSystemVerificationInit()
 		{
 			TurtleTradingSystemManager.SystemVerificationInit();
+
+			Assert.IsTrue(true);
 		}
 	}
 }

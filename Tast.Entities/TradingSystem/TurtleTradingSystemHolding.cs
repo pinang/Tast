@@ -1,18 +1,16 @@
-﻿using MongoDB.Bson;
-using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
+﻿using SqlFu;
 
 namespace Tast.Entities.TradingSystem
 {
 	/// <summary>
 	/// 海龟交易系统头寸
 	/// </summary>
+	[Table("TurtleTradingSystemHolding", PrimaryKey = "HoldingId")]
 	public class TurtleTradingSystemHolding
 	{
 		/// <summary>
-		/// 系统编号
+		/// 头寸编号
 		/// </summary>
-		[BsonId(IdGenerator = typeof(StringObjectIdGenerator))]
 		public string HoldingId { get; set; }
 
 		/// <summary>
@@ -43,7 +41,6 @@ namespace Tast.Entities.TradingSystem
 		/// <summary>
 		/// 开始价格
 		/// </summary>
-		[BsonRepresentation(BsonType.Double)]
 		public decimal StartPrice { get; set; }
 
 		/// <summary>
@@ -54,19 +51,16 @@ namespace Tast.Entities.TradingSystem
 		/// <summary>
 		/// 结束价格
 		/// </summary>
-		[BsonRepresentation(BsonType.Double)]
 		public decimal EndPrice { get; set; }
 
 		/// <summary>
 		/// 数量
 		/// </summary>
-		[BsonRepresentation(BsonType.Int32)]
 		public int Quantity { get; set; }
 
 		/// <summary>
 		/// 利润
 		/// </summary>
-		[BsonRepresentation(BsonType.Double)]
 		public decimal Profit { get; set; }
 	}
 }

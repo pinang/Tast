@@ -1,15 +1,15 @@
-﻿using MongoDB.Driver;
-using NLog;
+﻿using NLog;
+using SqlFu;
 using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
+using System.Data.Common;
+using System.Diagnostics;
+using System.Linq;
 using Tast.BusinessLogic.Index;
-using Tast.BusinessLogic.MongoDB;
 using Tast.Entities;
 using Tast.Entities.Index;
 using Tast.Entities.Stock;
 using Tast.Entities.TradingSystem;
-using System.Linq;
 
 namespace Tast.BusinessLogic.TradingSystem
 {
@@ -45,29 +45,30 @@ namespace Tast.BusinessLogic.TradingSystem
 			{
 				logger.Info("海龟交易系统初始化开始");
 
-				var db = MongoDBManager.GetDatabaseInstance();
-				var collection = db.GetCollection<TurtleTradingSystem>("TurtleTradingSystem");
-
-				//	获取所有的海龟交易系统
-				var task = collection.Find(s => s.Enable).ToListAsync();
-				task.Wait();
-
-				var systems = task.Result;
-				if (systems.Count == 0)
+				List<TurtleTradingSystem> systems = null;
+				using (var db = SqlFuDao.GetConnection())
 				{
-					//	增加默认的设置
-					var defaultSystem = AddDefault(db);
-					if (defaultSystem == null)
-						throw new Exception("初始化海龟交易系统出错");
+					systems = db.Query<TurtleTradingSystem>(s => s.Enable).ToList();
+					if (systems == null || systems.Count == 0)
+					{
+						//	增加默认的设置
+						var defaultSystem = AddDefault(db);
+						if (defaultSystem == null)
+							throw new Exception("初始化海龟交易系统出错");
 
-					systems.Add(defaultSystem);
+						systems.Add(defaultSystem);
+					}
+
+					db.Close();
 				}
 
-				//	并行
-				Parallel.ForEach(systems, new ParallelOptions { MaxDegreeOfParallelism = 4 }, (system) =>
+				System.Threading.Tasks.Task.Factory.StartNew(() =>
 				{
-					//	海龟交易系统验证
-					SystemVerification(system, db);
+					foreach (var system in systems)
+					{
+						//	海龟交易系统验证
+						SystemVerification(system);
+					}
 				});
 
 				logger.Info("海龟交易系统初始化结束");
@@ -83,7 +84,7 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// </summary>
 		/// <param name="db"></param>
 		/// <returns></returns>
-		private static TurtleTradingSystem AddDefault(IMongoDatabase db)
+		private static TurtleTradingSystem AddDefault(DbConnection db)
 		{
 			TurtleTradingSystem result = null;
 			try
@@ -94,40 +95,53 @@ namespace Tast.BusinessLogic.TradingSystem
 					Code = "AAPL",
 					StartAmount = 100000m,
 					Commission = 7,
-					StartDate = "20060101",
+					StartDate = "20120101",
 					EndDate = "20141231",
-					Start = new TurtleTradingSystemParameter { Holding = 2, N = 2, Enter = 2, Exit = 2, Stop = 2 },
-					End = new TurtleTradingSystemParameter { Holding = 10, N = 50, Enter = 50, Exit = 50, Stop = 50 },
-					Current = new TurtleTradingSystemParameter { Holding = 2, N = 2, Enter = 2, Exit = 2, Stop = 0 },
+					StartHolding = 2,
+					StartN = 2,
+					StartEnter = 2,
+					StartExit = 2,
+					StartStop = 2,
+					EndHolding = 20,
+					EndN = 50,
+					EndEnter = 50,
+					EndExit = 50,
+					EndStop = 20,
+					CurrentHolding = 2,
+					CurrentN = 2,
+					CurrentEnter = 2,
+					CurrentExit = 2,
+					CurrentStop = 0,
 					CurrentProfit = 0m,
 					CurrentProfitPercent = 0m,
-					Best = new TurtleTradingSystemParameter { Holding = 2, N = 2, Enter = 2, Exit = 2, Stop = 2 },
-					BestProfit = 0m,
+					BestHolding = 2,
+					BestN = 2,
+					BestEnter = 2,
+					BestExit = 2,
+					BestStop = 2,
+					BestProfit = decimal.MinValue,
 					BestProfitPercent = 0m,
 					Enable = true,
 					TotalAmount = 0,
-					FinishedAmount = 0
+					FinishedAmount = 0,
+					RemainTips = string.Empty
 				};
 
-				//	获取这一区间段的股票历史
-				var historyCollection = db.GetCollection<StockHistory>("StockHistory");
-				var historyTask = historyCollection.CountAsync(Builders<StockHistory>.Filter.And(
-					Builders<StockHistory>.Filter.Eq(h => h.Code, result.Code),
-					Builders<StockHistory>.Filter.Gte(h => h.Date, result.StartDate),
-					Builders<StockHistory>.Filter.Lte(h => h.Date, result.EndDate)));
+				//	获取这一区间段的股票历史记录数
+				var historyCount = db.WithSql("SELECT COUNT(0) FROM StockHistory WHERE Code = @0 AND Date >= @1 AND Date <= @2", 
+					result.Code, 
+					result.StartDate, 
+					result.EndDate)
+					.QuerySingle<int>();
 
-				historyTask.Wait();
-				var historyCount = historyTask.Result;
-
-				result.TotalAmount = (result.End.Holding - result.Start.Holding + 1) *
-					(result.End.N - result.Start.N + 1) *
-					(result.End.Enter - result.Start.Enter + 1) *
-					(result.End.Stop - result.Start.Stop + 1) *
+				result.TotalAmount = (result.EndHolding - result.StartHolding + 1) *
+					(result.EndN - result.StartN + 1) *
+					(result.EndEnter - result.StartEnter + 1) *
+					(result.EndStop - result.StartStop + 1) *
 					historyCount;
 
 				//	保存
-				var collection = db.GetCollection<TurtleTradingSystem>("TurtleTradingSystem");
-				collection.InsertOneAsync(result).Wait();
+				db.Insert<TurtleTradingSystem>(result);
 			}
 			catch (Exception ex)
 			{
@@ -142,128 +156,291 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// 海龟交易系统验证
 		/// </summary>
 		/// <param name="system"></param>
-		private static void SystemVerification(TurtleTradingSystem system, IMongoDatabase db)
+		private static void SystemVerification(TurtleTradingSystem system)
 		{
 			try
 			{
-				//	获取这一区间段的股票历史
-				var historyCollection = db.GetCollection<StockHistory>("StockHistory");
-				var historyTask = historyCollection.Find(Builders<StockHistory>.Filter.And(
-					Builders<StockHistory>.Filter.Eq(h => h.Code, system.Code),
-					Builders<StockHistory>.Filter.Gte(h => h.Date, system.StartDate),
-					Builders<StockHistory>.Filter.Lte(h => h.Date, system.EndDate)))
-					.SortBy(s => s.Date).ToListAsync();
-
-				historyTask.Wait();
-				var histories = historyTask.Result;
-
 				TestTrends = new List<TurtleTradingSystemTrend>();
 				TestHoldings = new List<TurtleTradingSystemHolding>();
 
-				while (Next(system))
+				//var collectionSystem = db.GetCollection<TurtleTradingSystem>("TurtleTradingSystem");
+				//var collectionTest = db.GetCollection<TurtleTradingSystemTest>("TurtleTradingSystemTest");
+				//var collectionTrend = db.GetCollection<TurtleTradingSystemTrend>("TurtleTradingSystemTrend");
+				//var collectionHolding = db.GetCollection<TurtleTradingSystemHolding>("TurtleTradingSystemHolding");
+
+				using (var db = SqlFuDao.GetConnection())
 				{
-					var test = new TurtleTradingSystemTest
+					var histories = db.Query<StockHistory>(h => h.Code == system.Code && h.Date.CompareTo(system.StartDate) >= 0 && h.Date.CompareTo(system.EndDate) <= 0).ToList();
+					if (histories.Count == 0)
+						throw new Exception("没有符合查询条件的历史股价");
+
+					Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dictPeroidExtermaIndex;
+					var result = PreparePeroidExtermaIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, db, out dictPeroidExtermaIndex);
+					if (!result.Success)
+						throw new Exception("查询区间极值指标出错");
+
+					Dictionary<int, Dictionary<string, TurtleIndex>> dictTurtleIndex;
+					result = PrepareTurtleIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, db, out dictTurtleIndex);
+					if (!result.Success)
+						throw new Exception("查询海龟指标出错");
+
+					var update = false;
+					var sw = new Stopwatch();
+					sw.Start();
+					while (Next(system))
 					{
-						TestId = Guid.NewGuid().ToString("N"),
-						SystemId = system.SystemId,
-						Holding = system.Current.Holding,
-						N = system.Current.N,
-						Enter = system.Current.Enter,
-						Exit = system.Current.Exit,
-						Stop = system.Current.Stop,
-						StartAmount = system.StartAmount,
-						EndAmount = system.StartAmount,
-						Commission = system.Commission,
-						Profit = 0m,
-						ProfitPercent = 0m
-					};
+						var test = new TurtleTradingSystemTest
+						{
+							TestId = Guid.NewGuid().ToString("N"),
+							SystemId = system.SystemId,
+							Holding = system.CurrentHolding,
+							N = system.CurrentN,
+							Enter = system.CurrentEnter,
+							Exit = system.CurrentExit,
+							Stop = system.CurrentStop,
+							StartAmount = system.StartAmount,
+							EndAmount = system.StartAmount,
+							Commission = system.Commission,
+							Profit = 0m,
+							ProfitPercent = 0m
+						};
 
-					PeroidExtermaIndex peiEnter, peiExit;
-					TurtleIndex ti;
-
-					//	循环日期演算结果
-					var result = Result.OK;
-					foreach (var history in histories)
-					{
-						//	获取前一天设定下的指标
-						result = TurtleIndexManager.Get(system.Code, test.N, history.PrevDate, out ti);
-						if (!result.Success)
-							throw new Exception("获取TurtleIndex出错, peroid:" + test.N + " date:" + history.Date);
-
-						result = PeroidExtermaIndexManager.Get(system.Code, test.Enter, history.PrevDate, out peiEnter);
-						if (!result.Success)
-							throw new Exception("获取PeroidExtermaIndex出错, peroid:" + test.Enter + " date:" + history.Date);
-
-						result = PeroidExtermaIndexManager.Get(system.Code, test.Exit, history.PrevDate, out peiExit);
-						if (!result.Success)
-							throw new Exception("获取PeroidExtermaIndex出错, peroid:" + test.Exit + " date:" + history.Date);
+						var ti = dictTurtleIndex[test.N];
+						var pein = dictPeroidExtermaIndex[test.Enter];
+						var peix = dictPeroidExtermaIndex[test.Exit];
 
 						//	清空状态量
 						CurrentTrend = null;
 						CurrentHoldings = new List<TurtleTradingSystemHolding>();
 
-						//	模拟
-						result = SimulateDay(test, history, ti, peiEnter, peiExit);
-						if (!result.Success)
-							throw new Exception(string.Format("海龟交易系统模拟失败, Code:{0} Date:{1} Holding:{2} N:{3} Enter:{4} Exit:{5} Stop:{6}。错误:", system.Code, history.Date, test.Holding, test.N, test.Enter, test.Exit, test.Stop));
+						//	循环日期演算结果
+						result = Result.OK;
+						foreach (var history in histories)
+						{
+							////	获取前一天设定下的指标
+							//result = TurtleIndexManager.Get(system.Code, test.N, history.PrevDate, out ti);
+							//if (!result.Success)
+							//	throw new Exception("获取TurtleIndex出错, peroid:" + test.N + " date:" + history.Date);
+
+							//result = PeroidExtermaIndexManager.Get(system.Code, test.Enter, history.PrevDate, out peiEnter);
+							//if (!result.Success)
+							//	throw new Exception("获取PeroidExtermaIndex出错, peroid:" + test.Enter + " date:" + history.Date);
+
+							//result = PeroidExtermaIndexManager.Get(system.Code, test.Exit, history.PrevDate, out peiExit);
+							//if (!result.Success)
+							//	throw new Exception("获取PeroidExtermaIndex出错, peroid:" + test.Exit + " date:" + history.Date);
+
+							if (!ti.ContainsKey(history.PrevDate))
+								throw new Exception("ti:" + history.PrevDate);
+
+							if (!pein.ContainsKey(history.PrevDate))
+								throw new Exception("pein:" + history.PrevDate);
+
+							if (!peix.ContainsKey(history.PrevDate))
+								throw new Exception("peix:" + history.PrevDate);
+
+							//	模拟
+							result = SimulateDay(test,
+								history,
+								ti[history.PrevDate],
+								pein[history.PrevDate],
+								peix[history.PrevDate]);
+							if (!result.Success)
+								throw new Exception(string.Format("海龟交易系统模拟失败, Code:{0} Date:{1} Holding:{2} N:{3} Enter:{4} Exit:{5} Stop:{6}。错误:", system.Code, history.Date, test.Holding, test.N, test.Enter, test.Exit, test.Stop));
+						}
+
+						//	如果演算结束时趋势还未结束，则强行终止
+						if (CurrentTrend != null)
+						{
+							var lastHistory = histories[histories.Count - 1];
+
+							var reason = string.Format("终止: 触及验算结束日期{0},卖出价格为收盘价{1}", lastHistory.Date, lastHistory.Close);
+
+							//	清仓
+							result = SimulateExit(test, lastHistory.Date, lastHistory.Close, reason);
+							if (!result.Success)
+								throw new Exception("演算结束终止交易时发生错误:" + result.Message);
+						}
+
+						//	计算利润
+						test.Profit = test.EndAmount - test.StartAmount;
+						test.ProfitPercent = test.StartAmount == 0 ? 0m : test.Profit / test.StartAmount;
+						system.CurrentProfit = test.Profit;
+						system.CurrentProfitPercent = test.ProfitPercent;
+						system.FinishedAmount++;
+
+						update = false;
+						var tasks = new List<System.Threading.Tasks.Task>();
+
+						//	判断是否达成利润率新高
+						if (test.Profit > system.BestProfit)
+						{
+							system.BestHolding = system.CurrentHolding;
+							system.BestN = system.CurrentN;
+							system.BestEnter = system.CurrentEnter;
+							system.BestExit = system.CurrentExit;
+							system.BestStop = system.CurrentStop;
+							system.BestProfit = system.CurrentProfit;
+							system.BestProfitPercent = system.CurrentProfitPercent;
+
+							logger.Info("海龟交易系统演算获得了更高的利润率{0:P2}, Holding:{1} N:{2} Enter:{3} Exit:{4} Stop:{5}",
+								system.BestProfitPercent,
+								system.BestHolding,
+								system.BestN,
+								system.BestEnter,
+								system.BestExit,
+								system.BestStop);
+
+							
+							//	只有突破原有记录时才记录明细
+							db.Insert<TurtleTradingSystemTest>(test);
+
+							foreach (var trend in TestTrends)
+							{
+								db.Insert<TurtleTradingSystemTrend>(trend);
+							}
+
+							foreach (var holding in TestHoldings)
+							{
+								db.Insert<TurtleTradingSystemHolding>(holding);
+							}
+
+							update = true;
+						}
+
+						if (system.FinishedAmount % 1024 == 0)
+						{
+							var elapsedSeconds = sw.Elapsed.TotalSeconds;
+							var totalSeconds = elapsedSeconds * ((double)system.TotalAmount / system.FinishedAmount);
+							var remainSeconds = totalSeconds - elapsedSeconds;
+							var ts = TimeSpan.FromSeconds(remainSeconds);
+
+							system.RemainTips = string.Format("剩余{0}天{1}小时{2}分钟{3}秒", ts.Days, ts.Hours, ts.Minutes, ts.Seconds);
+
+							update = true;
+						}
+
+						if (update)
+						{
+							//	保存演算结果
+							db.Update<TurtleTradingSystem>(system, system.SystemId);
+						}
+
+						if (tasks.Count > 0)
+						{
+							System.Threading.Tasks.Task.WaitAll(tasks.ToArray());
+						}
+
+						TestTrends.Clear();
+						TestHoldings.Clear();
 					}
 
-					//	如果演算结束时趋势还未结束，则强行终止
-					if (CurrentTrend != null)
-					{
-						var lastHistory = histories[histories.Count - 1];
-
-						var reason = string.Format("终止: 触及验算结束日期{0},卖出价格为收盘价{1}", lastHistory.Date, lastHistory.Close);
-
-						//	清仓
-						result = SimulateExit(test, lastHistory.Date, lastHistory.Close, reason);
-						if (!result.Success)
-							throw new Exception("演算结束终止交易时发生错误:" + result.Message);
-					}
-
-					//	计算利润
-					test.Profit = test.EndAmount - test.StartAmount;
-					test.ProfitPercent = test.StartAmount == 0 ? 0m : test.Profit / test.StartAmount;
-					system.CurrentProfit = test.Profit;
-					system.CurrentProfitPercent = test.ProfitPercent;
-
-					//	判断是否达成利润率新高
-					if (test.Profit > system.BestProfit)
-					{
-						system.Best = system.Current;
-						system.BestProfit = system.CurrentProfit;
-						system.BestProfitPercent = system.CurrentProfitPercent;
-
-						logger.Info("海龟交易系统演算获得了更高的利润率{0:P2}, TestId:{1}", system.BestProfitPercent, test.TestId);
-					}
-
-					//	保存演算结果
-					var tasks = new List<System.Threading.Tasks.Task>();
-
-					var collectionSystem = db.GetCollection<TurtleTradingSystem>("TurtleTradingSystem");
-					var collectionTest = db.GetCollection<TurtleTradingSystemTest>("TurtleTradingSystemTest");
-					var collectionTrend = db.GetCollection<TurtleTradingSystemTrend>("TurtleTradingSystemTrend");
-					var collectionHolding = db.GetCollection<TurtleTradingSystemHolding>("TurtleTradingSystemHolding");
-
-					logger.Info("System:{0} Test:{1} Trend:{2} Holding:{3}", system != null, test != null, TestTrends.Count, TestHoldings.Count);
-
-					tasks.Add(collectionSystem.ReplaceOneAsync(Builders<TurtleTradingSystem>.Filter.Where(s => s.SystemId == system.SystemId), system));
-					tasks.Add(collectionTest.InsertOneAsync(test));
-					tasks.Add(collectionTrend.InsertManyAsync(TestTrends));
-					tasks.Add(collectionHolding.InsertManyAsync(TestHoldings));
-
-					System.Threading.Tasks.Task.WaitAll(tasks.ToArray());
-
-					TestTrends.Clear();
-					TestHoldings.Clear();
-
-					break;
+					db.Close();
 				}
+
+				logger.Info("演算结束");
 			}
 			catch (Exception ex)
 			{
 				logger.Error<Exception>(ex);
 			}
+		}
+
+		/// <summary>
+		/// 准备区间极值指标
+		/// </summary>
+		/// <param name="system"></param>
+		/// <param name="startDate"></param>
+		/// <param name="endDate"></param>
+		/// <param name="db"></param>
+		/// <param name="dict"></param>
+		/// <returns></returns>
+		private static Result PreparePeroidExtermaIndex(TurtleTradingSystem system, string startDate, string endDate, DbConnection db, out Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dict)
+		{
+			dict = null;
+			var result = Result.OK;
+			try
+			{
+				var min = Math.Min(system.StartEnter, system.StartExit);
+				var max = Math.Max(system.EndEnter, system.EndExit);
+
+				PeroidExtermaIndex pei;
+				for (var index = min; index <= max; index++)
+				{
+					PeroidExtermaIndexManager.Get(system.Code, index, startDate, out pei);
+				}
+
+				var indexes = db.WithSql("SELECT * FROM PeroidExtermaIndex WHERE Code = @0 AND Date >= @1 AND Date <= @2 AND Peroid >= @3 AND Peroid <= @4",
+					system.Code,
+					startDate,
+					endDate,
+					system.StartN,
+					system.EndN)
+					.Query<PeroidExtermaIndex>().ToList();
+
+				dict = new Dictionary<int, Dictionary<string, PeroidExtermaIndex>>();
+				for (var index = min; index <= max; index++)
+				{
+					dict[index] = indexes.Where(i => i.Peroid == index).ToDictionary(i => i.Date);
+				}
+			}
+			catch (Exception ex)
+			{
+				logger.Error<Exception>(ex);
+				result = Result.Create(ex);
+			}
+
+			return result;
+		}
+
+		/// <summary>
+		/// 准备海龟指标
+		/// </summary>
+		/// <param name="system"></param>
+		/// <param name="startDate"></param>
+		/// <param name="endDate"></param>
+		/// <param name="db"></param>
+		/// <param name="dict"></param>
+		/// <returns></returns>
+		private static Result PrepareTurtleIndex(TurtleTradingSystem system, string startDate, string endDate, DbConnection db, out Dictionary<int, Dictionary<string, TurtleIndex>> dict)
+		{
+			dict = null;
+			var result = Result.OK;
+			try
+			{
+				logger.Info("start:{0} end:{1} min:{2} max:{3}", startDate, endDate, system.StartN, system.EndN);
+
+				TurtleIndex ti;
+				for (var index = system.StartN; index <= system.EndN; index++)
+				{
+					result = TurtleIndexManager.Get(system.Code, index, startDate, out ti);
+					if (!result.Success) return result;
+				}
+
+				var indexes = db.WithSql("SELECT * FROM TurtleIndex WHERE Code = @0 AND Date >= @1 AND Date <= @2 AND Peroid >= @3 AND Peroid <= @4",
+					system.Code,
+					startDate,
+					endDate,
+					system.StartN,
+					system.EndN)
+					.Query<TurtleIndex>().ToList();
+
+				if (!indexes.Exists(i => i.Date == startDate && i.Peroid == 2))
+					throw new Exception("not exists");
+
+				dict = new Dictionary<int, Dictionary<string, TurtleIndex>>();
+				for (var index = system.StartN; index <= system.EndN; index++)
+				{
+					dict[index] = indexes.Where(i => i.Peroid == index).ToDictionary(i => i.Date);
+				}
+			}
+			catch (Exception ex)
+			{
+				logger.Error<Exception>(ex);
+				result = Result.Create(ex);
+			}
+
+			return result;
 		}
 
 		/// <summary>
@@ -273,24 +450,21 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// <returns></returns>
 		private static bool Next(TurtleTradingSystem system)
 		{
-			if (system.Start == null || system.End == null || system.Current == null)
-				return false;
-
 			//	是否进位
 			bool carry;
-			system.Current.Stop = Increase(system.Current.Stop, system.Start.Stop, system.End.Stop, out carry);
+			system.CurrentStop = Increase(system.CurrentStop, system.StartStop, system.EndStop, out carry);
 			if (!carry) return true;
 
-			system.Current.Exit = Increase(system.Current.Exit, system.Start.Exit, system.End.Exit, out carry);
+			system.CurrentN = Increase(system.CurrentN, system.StartN, system.EndN, out carry);
 			if (!carry) return true;
 
-			system.Current.Enter = Increase(system.Current.Enter, system.Start.Enter, system.End.Enter, out carry);
+			system.CurrentHolding = Increase(system.CurrentHolding, system.StartHolding, system.EndHolding, out carry);
 			if (!carry) return true;
 
-			system.Current.N = Increase(system.Current.N, system.Start.N, system.End.N, out carry);
+			system.CurrentExit = Increase(system.CurrentExit, system.StartExit, system.EndExit, out carry);
 			if (!carry) return true;
 
-			system.Current.Holding = Increase(system.Current.Holding, system.Start.Holding, system.End.Holding, out carry);
+			system.CurrentEnter = Increase(system.CurrentEnter, system.StartEnter, system.EndEnter, out carry);
 			if (!carry) return true;
 
 			return false;
@@ -334,7 +508,7 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// <returns></returns>
 		private static Result SimulateDay(TurtleTradingSystemTest test, StockHistory history, TurtleIndex ti, PeroidExtermaIndex peiEnter, PeroidExtermaIndex peiExit)
 		{
-			const int separeteCount = 100;
+			const int separeteCount = 10;
 			var result = Result.OK;
 			try
 			{
@@ -376,9 +550,6 @@ namespace Tast.BusinessLogic.TradingSystem
 			var result = Result.OK;
 			try
 			{
-				//	每个头寸的金额
-				var holdingAmount = test.EndAmount / test.Holding;
-
 				if (CurrentTrend == null)
 				{
 					#region 尚未有趋势的时候等待时机启动一波新趋势
@@ -400,6 +571,9 @@ namespace Tast.BusinessLogic.TradingSystem
 							MaxHolding = 0,
 							Profit = 0m
 						};
+
+						//	每个头寸的金额
+						var holdingAmount = test.EndAmount / test.Holding;
 
 						//	第一个头寸
 						CurrentHoldings.Add(new TurtleTradingSystemHolding
@@ -424,9 +598,12 @@ namespace Tast.BusinessLogic.TradingSystem
 
 					#region 增持
 					if (CurrentHoldings.Count < test.Holding &&
-						((CurrentTrend.Direction && price >= (lastHolding.StartPrice + ti.N / 2)) ||
-						(!CurrentTrend.Direction && price <= (lastHolding.StartPrice - ti.N / 2))))
+						((CurrentTrend.Direction && price >= (lastHolding.StartPrice + ti.N * 0.5m)) ||
+						(!CurrentTrend.Direction && price <= (lastHolding.StartPrice - ti.N * 0.5m))))
 					{
+						//	每个头寸的金额
+						var holdingAmount = test.EndAmount / test.Holding;
+
 						CurrentHoldings.Add(new TurtleTradingSystemHolding
 						{
 							HoldingId = Guid.NewGuid().ToString("N"),
@@ -506,6 +683,7 @@ namespace Tast.BusinessLogic.TradingSystem
 				//	趋势结束
 				CurrentTrend.EndReason = reason;
 				CurrentTrend.EndDate = date;
+				CurrentTrend.EndPrice = price;
 				CurrentTrend.MaxHolding = CurrentHoldings.Count;
 				CurrentTrend.Profit = CurrentHoldings.Sum(holding => holding.Profit);
 

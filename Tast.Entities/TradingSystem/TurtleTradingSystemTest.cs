@@ -1,14 +1,13 @@
-﻿using MongoDB.Bson.Serialization.Attributes;
-using MongoDB.Bson.Serialization.IdGenerators;
+﻿using SqlFu;
 
 namespace Tast.Entities.TradingSystem
 {
+	[Table("TurtleTradingSystemTest", PrimaryKey = "TestId")]
 	public class TurtleTradingSystemTest
 	{
 		/// <summary>
 		/// 测试编号
 		/// </summary>
-		[BsonId(IdGenerator = typeof(StringObjectIdGenerator))]
 		public string TestId { get; set; }
 
 		/// <summary>
@@ -57,12 +56,12 @@ namespace Tast.Entities.TradingSystem
 		public decimal Commission { get; set; }
 
 		/// <summary>
-		/// 当前利润额
+		/// 利润额
 		/// </summary>
 		public decimal Profit { get; set; }
 
 		/// <summary>
-		/// 当前利润率
+		/// 利润率
 		/// </summary>
 		public decimal ProfitPercent { get; set; }
 	}

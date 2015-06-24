@@ -11,7 +11,7 @@ namespace Tast.BusinessLogic.Task
 			Schedule(() =>
 			{
 				StockHistoryManager.RefreshAllStockHistory();
-			}).ToRunEvery(1).Days().At(20, 15);
+			}).ToRunEvery(1).Days().At(1, 47);
 		}
 	}
 }

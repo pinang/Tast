@@ -32,16 +32,14 @@
     <UseVSHostingProcess>false</UseVSHostingProcess>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="MongoDB.Bson">
-      <HintPath>..\packages\MongoDB.Bson.2.0.1\lib\net45\MongoDB.Bson.dll</HintPath>
+    <Reference Include="CavemanTools">
+      <HintPath>..\packages\CavemanTools.3.13.0\lib\Net45\CavemanTools.dll</HintPath>
     </Reference>
-    <Reference Include="MongoDB.Driver">
-      <HintPath>..\packages\MongoDB.Driver.2.0.1\lib\net45\MongoDB.Driver.dll</HintPath>
-    </Reference>
-    <Reference Include="MongoDB.Driver.Core">
-      <HintPath>..\packages\MongoDB.Driver.Core.2.0.1\lib\net45\MongoDB.Driver.Core.dll</HintPath>
+    <Reference Include="SqlFu">
+      <HintPath>..\packages\SqlFu.2.3.5\lib\Net45\SqlFu.dll</HintPath>
     </Reference>
     <Reference Include="System" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
     <Reference Include="System.Core" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
@@ -58,14 +56,12 @@
     <Compile Include="Stock\StockHistory.cs" />
     <Compile Include="TradingSystem\TurtleTradingSystem.cs" />
     <Compile Include="TradingSystem\TurtleTradingSystemHolding.cs" />
-    <Compile Include="TradingSystem\TurtleTradingSystemParameter.cs" />
     <Compile Include="TradingSystem\TurtleTradingSystemTest.cs" />
     <Compile Include="TradingSystem\TurtleTradingSystemTrend.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
-  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.
