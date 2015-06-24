@@ -1,4 +1,5 @@
 ﻿using nZAI.Database.Attributes;
+using System.Collections.Generic;
 
 namespace Tast.Entities.TradingSystem
 {
@@ -64,5 +65,29 @@ namespace Tast.Entities.TradingSystem
 		/// 利润率
 		/// </summary>
 		public decimal ProfitPercent { get; set; }
+
+		/// <summary>
+		/// 当前的趋势
+		/// </summary>
+		[DbColumn(Ignore = true)]
+		public TurtleTradingSystemTrend CurrentTrend { get; set; }
+
+		/// <summary>
+		/// 当前的头寸
+		/// </summary>
+		[DbColumn(Ignore = true)]
+		public List<TurtleTradingSystemHolding> CurrentHoldings { get; set; }
+
+		/// <summary>
+		/// 历次趋势
+		/// </summary>
+		[DbColumn(Ignore = true)]
+		public List<TurtleTradingSystemTrend> Trends { get; set; }
+
+		/// <summary>
+		/// 历次头寸
+		/// </summary>
+		[DbColumn(Ignore = true)]
+		public List<TurtleTradingSystemHolding> Holdings { get; set; }
 	}
 }

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Data.Common;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using Tast.BusinessLogic.Index;
 using Tast.Entities;
 using Tast.Entities.Index;
@@ -21,21 +22,7 @@ namespace Tast.BusinessLogic.TradingSystem
 	{
 		private static Logger logger = LogManager.GetCurrentClassLogger();
 
-		#region 模拟交易的中间状态量
-
-		/// <summary>
-		/// 当前的趋势
-		/// </summary>
-		private static TurtleTradingSystemTrend CurrentTrend = null;
-		/// <summary>
-		/// 当前的持仓
-		/// </summary>
-		private static List<TurtleTradingSystemHolding> CurrentHoldings = null;
-
-		private static List<TurtleTradingSystemTrend> TestTrends = null;
-
-		private static List<TurtleTradingSystemHolding> TestHoldings = null;
-		#endregion
+		private static readonly object Locker = new object();
 
 		/// <summary>
 		/// 系统验证初始化
@@ -155,40 +142,36 @@ namespace Tast.BusinessLogic.TradingSystem
 		{
 			try
 			{
-				TestTrends = new List<TurtleTradingSystemTrend>();
-				TestHoldings = new List<TurtleTradingSystemHolding>();
+				var histories = DBO.Query<StockHistory>("SELECT * FROM StockHistory WHERE Code = @Code AND Date >= @StartDate AND Date <= @EndDate ORDER BY Date",
+					new MySqlParameter("@Code", system.Code),
+					new MySqlParameter("@StartDate", system.StartDate),
+					new MySqlParameter("@EndDate", system.EndDate));
+				if (histories.Count == 0)
+					throw new Exception("没有符合查询条件的历史股价");
 
-				using (var conn = DBO.GetConnection())
+				Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dictPeroidExtermaIndex;
+				var result = PreparePeroidExtermaIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, out dictPeroidExtermaIndex);
+				if (!result.Success)
+					throw new Exception("查询区间极值指标出错");
+
+				Dictionary<int, Dictionary<string, TurtleIndex>> dictTurtleIndex;
+				result = PrepareTurtleIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, out dictTurtleIndex);
+				if (!result.Success)
+					throw new Exception("查询海龟指标出错");
+
+				var update = false;
+				var sw = new Stopwatch();
+				sw.Start();
+				while (Next(system))
 				{
-					conn.Open();
-
-					var histories = DBO.Query<StockHistory>("SELECT * FROM StockHistory WHERE Code = @Code AND Date >= @StartDate AND Date <= @EndDate ORDER BY Date",
-						new MySqlParameter("@Code", system.Code),
-						new MySqlParameter("@StartDate", system.StartDate),
-						new MySqlParameter("@EndDate", system.EndDate));
-					if (histories.Count == 0)
-						throw new Exception("没有符合查询条件的历史股价");
-
-					Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dictPeroidExtermaIndex;
-					var result = PreparePeroidExtermaIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, conn, out dictPeroidExtermaIndex);
-					if (!result.Success)
-						throw new Exception("查询区间极值指标出错");
-
-					Dictionary<int, Dictionary<string, TurtleIndex>> dictTurtleIndex;
-					result = PrepareTurtleIndex(system, histories[0].PrevDate, histories[histories.Count - 1].Date, conn, out dictTurtleIndex);
-					if (!result.Success)
-						throw new Exception("查询海龟指标出错");
-
-					var update = false;
-					var sw = new Stopwatch();
-					sw.Start();
-					while (Next(system))
+					//	并行计算
+					Parallel.For(system.StartHolding, system.EndHolding + 1, new ParallelOptions { MaxDegreeOfParallelism = 16 }, (holding) =>
 					{
 						var test = new TurtleTradingSystemTest
 						{
 							TestId = Guid.NewGuid().ToString("N"),
 							SystemId = system.SystemId,
-							Holding = system.CurrentHolding,
+							Holding = holding,
 							N = system.CurrentN,
 							Enter = system.CurrentEnter,
 							Exit = system.CurrentExit,
@@ -197,118 +180,78 @@ namespace Tast.BusinessLogic.TradingSystem
 							EndAmount = system.StartAmount,
 							Commission = system.Commission,
 							Profit = 0m,
-							ProfitPercent = 0m
+							ProfitPercent = 0m,
+							CurrentTrend = null,
+							CurrentHoldings = new List<TurtleTradingSystemHolding>(),
+							Trends = new List<TurtleTradingSystemTrend>(),
+							Holdings = new List<TurtleTradingSystemHolding>()
 						};
 
-						var ti = dictTurtleIndex[test.N];
-						var pein = dictPeroidExtermaIndex[test.Enter];
-						var peix = dictPeroidExtermaIndex[test.Exit];
+						//	模拟测试
+						result = SimulateTest(test, histories, dictPeroidExtermaIndex, dictTurtleIndex);
+						if (!result.Success)
+							throw new Exception("模拟海龟交易系统测试时发生错误:" + result.Message);
 
-						//	清空状态量
-						CurrentTrend = null;
-						CurrentHoldings = new List<TurtleTradingSystemHolding>();
-
-						//	循环日期演算结果
-						result = Result.OK;
-						foreach (var history in histories)
+						lock (Locker)
 						{
-							//if (!ti.ContainsKey(history.PrevDate))
-							//	throw new Exception("ti:" + history.PrevDate);
+							system.CurrentHolding = holding;
+							system.CurrentProfit = test.Profit;
+							system.CurrentProfitPercent = test.ProfitPercent;
+							system.FinishedAmount++;
 
-							//if (!pein.ContainsKey(history.PrevDate))
-							//	throw new Exception("pein:" + history.PrevDate);
+							update = false;
+							//	判断是否达成利润率新高
+							if (test.Profit > system.BestProfit)
+							{
+								system.BestHolding = system.CurrentHolding;
+								system.BestN = system.CurrentN;
+								system.BestEnter = system.CurrentEnter;
+								system.BestExit = system.CurrentExit;
+								system.BestStop = system.CurrentStop;
+								system.BestProfit = system.CurrentProfit;
+								system.BestProfitPercent = system.CurrentProfitPercent;
 
-							//if (!peix.ContainsKey(history.PrevDate))
-							//	throw new Exception("peix:" + history.PrevDate);
+								logger.Info("海龟交易系统演算获得了更高的利润率{0:P2}, Holding:{1} N:{2} Enter:{3} Exit:{4} Stop:{5}",
+									system.BestProfitPercent,
+									system.BestHolding,
+									system.BestN,
+									system.BestEnter,
+									system.BestExit,
+									system.BestStop);
 
-							//	模拟
-							result = SimulateDay(test,
-								history,
-								ti[history.PrevDate],
-								pein[history.PrevDate],
-								peix[history.PrevDate]);
-							if (!result.Success)
-								throw new Exception(string.Format("海龟交易系统模拟失败, Code:{0} Date:{1} Holding:{2} N:{3} Enter:{4} Exit:{5} Stop:{6}。错误:", system.Code, history.Date, test.Holding, test.N, test.Enter, test.Exit, test.Stop));
+								//	只有突破原有记录时才记录明细
+								if (!DBO.Insert<TurtleTradingSystemTest>(test))
+									throw new Exception("保存TurtleTradingSystemTest发生错误");
+
+								if (!DBO.BatchInsert<TurtleTradingSystemTrend>(test.Trends))
+									throw new Exception("保存TurtleTradingSystemTrend发生错误");
+
+								if (!DBO.BatchInsert<TurtleTradingSystemHolding>(test.Holdings))
+									throw new Exception("保存TurtleTradingSystemHolding发生错误");
+
+								update = true;
+							}
+
+							if (system.FinishedAmount % 10240 == 0)
+							{
+								var elapsedSeconds = sw.Elapsed.TotalSeconds + system.PassedSeconds;
+								var totalSeconds = elapsedSeconds * ((double)system.TotalAmount / system.FinishedAmount);
+								var remainSeconds = totalSeconds - elapsedSeconds;
+								var ts = TimeSpan.FromSeconds(remainSeconds);
+
+								system.RemainTips = string.Format("剩余{0}天{1}小时{2}分钟{3}秒", ts.Days, ts.Hours, ts.Minutes, ts.Seconds);
+
+								update = true;
+							}
+
+							if (update)
+							{
+								//	保存演算结果
+								if (!DBO.Update<TurtleTradingSystem>(system))
+									throw new Exception("保存TurtleTradingSystem发生错误");
+							}
 						}
-
-						//	如果演算结束时趋势还未结束，则强行终止
-						if (CurrentTrend != null)
-						{
-							var lastHistory = histories[histories.Count - 1];
-
-							var reason = string.Format("终止: 触及验算结束日期{0},卖出价格为收盘价{1}", lastHistory.Date, lastHistory.Close);
-
-							//	清仓
-							result = SimulateExit(test, lastHistory.Date, lastHistory.Close, reason);
-							if (!result.Success)
-								throw new Exception("演算结束终止交易时发生错误:" + result.Message);
-						}
-
-						//	计算利润
-						test.Profit = test.EndAmount - test.StartAmount;
-						test.ProfitPercent = test.StartAmount == 0 ? 0m : test.EndAmount / test.StartAmount;
-						system.CurrentProfit = test.Profit;
-						system.CurrentProfitPercent = test.ProfitPercent;
-						system.FinishedAmount++;
-
-						update = false;
-
-						//	判断是否达成利润率新高
-						if (test.Profit > system.BestProfit)
-						{
-							system.BestHolding = system.CurrentHolding;
-							system.BestN = system.CurrentN;
-							system.BestEnter = system.CurrentEnter;
-							system.BestExit = system.CurrentExit;
-							system.BestStop = system.CurrentStop;
-							system.BestProfit = system.CurrentProfit;
-							system.BestProfitPercent = system.CurrentProfitPercent;
-
-							logger.Info("海龟交易系统演算获得了更高的利润率{0:P2}, Holding:{1} N:{2} Enter:{3} Exit:{4} Stop:{5}",
-								system.BestProfitPercent,
-								system.BestHolding,
-								system.BestN,
-								system.BestEnter,
-								system.BestExit,
-								system.BestStop);
-
-							//	只有突破原有记录时才记录明细
-							if (!DBO.Insert<TurtleTradingSystemTest>(test, conn))
-								throw new Exception("保存TurtleTradingSystemTest发生错误");
-
-							if (!DBO.BatchInsert<TurtleTradingSystemTrend>(TestTrends, conn))
-								throw new Exception("保存TurtleTradingSystemTrend发生错误");
-
-							if (!DBO.BatchInsert<TurtleTradingSystemHolding>(TestHoldings, conn))
-								throw new Exception("保存TurtleTradingSystemHolding发生错误");
-
-							update = true;
-						}
-
-						if (system.FinishedAmount % 10240 == 0)
-						{
-							var elapsedSeconds = sw.Elapsed.TotalSeconds + system.PassedSeconds;
-							var totalSeconds = elapsedSeconds * ((double)system.TotalAmount / system.FinishedAmount);
-							var remainSeconds = totalSeconds - elapsedSeconds;
-							var ts = TimeSpan.FromSeconds(remainSeconds);
-
-							system.RemainTips = string.Format("剩余{0}天{1}小时{2}分钟{3}秒", ts.Days, ts.Hours, ts.Minutes, ts.Seconds);
-
-							update = true;
-						}
-
-						if (update)
-						{
-							//	保存演算结果
-							if (!DBO.Update<TurtleTradingSystem>(system, conn))
-								throw new Exception("保存TurtleTradingSystem发生错误");
-						}
-
-						TestTrends.Clear();
-						TestHoldings.Clear();
-					}
-
-					conn.Close();
+					});
 				}
 
 				logger.Info("演算结束");
@@ -328,7 +271,7 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// <param name="conn"></param>
 		/// <param name="dict"></param>
 		/// <returns></returns>
-		private static Result PreparePeroidExtermaIndex(TurtleTradingSystem system, string startDate, string endDate, DbConnection conn, out Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dict)
+		private static Result PreparePeroidExtermaIndex(TurtleTradingSystem system, string startDate, string endDate, out Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dict)
 		{
 			dict = null;
 			var result = Result.OK;
@@ -375,7 +318,7 @@ namespace Tast.BusinessLogic.TradingSystem
 		/// <param name="db"></param>
 		/// <param name="dict"></param>
 		/// <returns></returns>
-		private static Result PrepareTurtleIndex(TurtleTradingSystem system, string startDate, string endDate, DbConnection db, out Dictionary<int, Dictionary<string, TurtleIndex>> dict)
+		private static Result PrepareTurtleIndex(TurtleTradingSystem system, string startDate, string endDate, out Dictionary<int, Dictionary<string, TurtleIndex>> dict)
 		{
 			dict = null;
 			var result = Result.OK;
@@ -394,7 +337,7 @@ namespace Tast.BusinessLogic.TradingSystem
 					new MySqlParameter("@EndDate", endDate),
 					new MySqlParameter("@PeroidMin", system.StartN),
 					new MySqlParameter("@PeroidMax", system.EndN));
-				
+
 				dict = new Dictionary<int, Dictionary<string, TurtleIndex>>();
 				for (var index = system.StartN; index <= system.EndN; index++)
 				{
@@ -425,8 +368,8 @@ namespace Tast.BusinessLogic.TradingSystem
 			system.CurrentN = Increase(system.CurrentN, system.StartN, system.EndN, out carry);
 			if (!carry) return true;
 
-			system.CurrentHolding = Increase(system.CurrentHolding, system.StartHolding, system.EndHolding, out carry);
-			if (!carry) return true;
+			//system.CurrentHolding = Increase(system.CurrentHolding, system.StartHolding, system.EndHolding, out carry);
+			//if (!carry) return true;
 
 			system.CurrentExit = Increase(system.CurrentExit, system.StartExit, system.EndExit, out carry);
 			if (!carry) return true;
@@ -461,6 +404,68 @@ namespace Tast.BusinessLogic.TradingSystem
 
 			return current;
 		}
+
+		private static Result SimulateTest(TurtleTradingSystemTest test,
+			List<StockHistory> histories,
+			Dictionary<int, Dictionary<string, PeroidExtermaIndex>> dictPeroidExtermaIndex,
+			Dictionary<int, Dictionary<string, TurtleIndex>> dictTurtleIndex)
+		{
+			var result = Result.OK;
+			try
+			{
+				var ti = dictTurtleIndex[test.N];
+				var pein = dictPeroidExtermaIndex[test.Enter];
+				var peix = dictPeroidExtermaIndex[test.Exit];
+
+				//	循环日期演算结果
+				result = Result.OK;
+				foreach (var history in histories)
+				{
+					//if (!ti.ContainsKey(history.PrevDate))
+					//	throw new Exception("ti:" + history.PrevDate);
+
+					//if (!pein.ContainsKey(history.PrevDate))
+					//	throw new Exception("pein:" + history.PrevDate);
+
+					//if (!peix.ContainsKey(history.PrevDate))
+					//	throw new Exception("peix:" + history.PrevDate);
+
+					//	模拟
+					result = SimulateDay(test,
+						history,
+						ti[history.PrevDate],
+						pein[history.PrevDate],
+						peix[history.PrevDate]);
+					if (!result.Success)
+						throw new Exception(string.Format("海龟交易系统模拟失败, Date:{0} Holding:{1} N:{2} Enter:{3} Exit:{4} Stop:{5}。错误:", history.Date, test.Holding, test.N, test.Enter, test.Exit, test.Stop));
+				}
+
+				//	如果演算结束时趋势还未结束，则强行终止
+				if (test.CurrentTrend != null)
+				{
+					var lastHistory = histories[histories.Count - 1];
+
+					var reason = string.Format("终止: 触及验算结束日期{0},卖出价格为收盘价{1}", lastHistory.Date, lastHistory.Close);
+
+					//	清仓
+					result = SimulateExit(test, lastHistory.Date, lastHistory.Close, reason);
+					if (!result.Success)
+						throw new Exception("演算结束终止交易时发生错误:" + result.Message);
+				}
+
+				//	计算利润
+				test.Profit = test.EndAmount - test.StartAmount;
+				test.ProfitPercent = test.StartAmount == 0 ? 0m : test.EndAmount / test.StartAmount;
+			}
+			catch (Exception ex)
+			{
+				logger.Error<Exception>(ex);
+				result = Result.Create(ex);
+			}
+
+			return result;
+		}
+
 
 		/// <summary>
 		/// 演算
@@ -517,7 +522,7 @@ namespace Tast.BusinessLogic.TradingSystem
 			var result = Result.OK;
 			try
 			{
-				if (CurrentTrend == null)
+				if (test.CurrentTrend == null)
 				{
 					#region 尚未有趋势的时候等待时机启动一波新趋势
 					if (price > peiEnter.Max || price < peiEnter.Min)
@@ -526,7 +531,7 @@ namespace Tast.BusinessLogic.TradingSystem
 						//	方向: true-多 false-空
 						var direcion = price > peiEnter.Max;
 
-						CurrentTrend = new TurtleTradingSystemTrend
+						test.CurrentTrend = new TurtleTradingSystemTrend
 						{
 							TrendId = Guid.NewGuid().ToString("N"),
 							SystemId = test.SystemId,
@@ -543,13 +548,13 @@ namespace Tast.BusinessLogic.TradingSystem
 						var holdingAmount = test.EndAmount / test.Holding;
 
 						//	第一个头寸
-						CurrentHoldings.Add(new TurtleTradingSystemHolding
+						test.CurrentHoldings.Add(new TurtleTradingSystemHolding
 						{
 							HoldingId = Guid.NewGuid().ToString("N"),
 							SystemId = test.SystemId,
 							TestId = test.TestId,
-							TrendId = CurrentTrend.TrendId,
-							Direction = CurrentTrend.Direction,
+							TrendId = test.CurrentTrend.TrendId,
+							Direction = test.CurrentTrend.Direction,
 							StartDate = date,
 							StartPrice = price,
 							EndPrice = price + (direcion ? -1 : 1) * ti.N * test.Stop,
@@ -561,36 +566,38 @@ namespace Tast.BusinessLogic.TradingSystem
 				else
 				{
 					#region 在趋势中等待时机增持和退场
-					var lastHolding = CurrentHoldings[CurrentHoldings.Count - 1];
+					var lastHolding = test.CurrentHoldings[test.CurrentHoldings.Count - 1];
 
 					#region 增持
-					if (CurrentHoldings.Count < test.Holding &&
-						((CurrentTrend.Direction && price >= (lastHolding.StartPrice + ti.N * 0.5m)) ||
-						(!CurrentTrend.Direction && price <= (lastHolding.StartPrice - ti.N * 0.5m))))
+					if (test.CurrentHoldings.Count < test.Holding)
 					{
-						//	每个头寸的金额
-						var holdingAmount = test.EndAmount / test.Holding;
-
-						CurrentHoldings.Add(new TurtleTradingSystemHolding
+						if ((test.CurrentTrend.Direction && price >= (lastHolding.StartPrice + ti.N / 2)) ||
+							(!test.CurrentTrend.Direction && price <= (lastHolding.StartPrice - ti.N / 2)))
 						{
-							HoldingId = Guid.NewGuid().ToString("N"),
-							SystemId = test.SystemId,
-							TestId = test.TestId,
-							TrendId = CurrentTrend.TrendId,
-							Direction = CurrentTrend.Direction,
-							StartDate = date,
-							StartPrice = price,
-							EndPrice = price + (CurrentTrend.Direction ? -1 : 1) * ti.N * test.Stop,
-							Quantity = (int)(holdingAmount / price)
-						});
+							//	每个头寸的金额
+							var holdingAmount = test.EndAmount / test.Holding;
 
-						return result;
+							test.CurrentHoldings.Add(new TurtleTradingSystemHolding
+							{
+								HoldingId = Guid.NewGuid().ToString("N"),
+								SystemId = test.SystemId,
+								TestId = test.TestId,
+								TrendId = test.CurrentTrend.TrendId,
+								Direction = test.CurrentTrend.Direction,
+								StartDate = date,
+								StartPrice = price,
+								EndPrice = price + (test.CurrentTrend.Direction ? -1 : 1) * ti.N * test.Stop,
+								Quantity = (int)(holdingAmount / price)
+							});
+
+							return result;
+						}
 					};
 					#endregion
 
 					#region 止损
-					if ((CurrentTrend.Direction && price <= lastHolding.EndPrice) ||
-						(!CurrentTrend.Direction && price >= lastHolding.EndPrice))
+					if ((test.CurrentTrend.Direction && price <= lastHolding.EndPrice) ||
+						(!test.CurrentTrend.Direction && price >= lastHolding.EndPrice))
 					{
 						var reason = string.Format("止损: 交易价{0}触及止损价{1}", price, lastHolding.EndPrice);
 
@@ -601,13 +608,13 @@ namespace Tast.BusinessLogic.TradingSystem
 					#endregion
 
 					#region 止盈
-					if ((CurrentTrend.Direction && price < peiExit.Min) || (!CurrentTrend.Direction && price > peiExit.Max))
+					if ((test.CurrentTrend.Direction && price < peiExit.Min) || (!test.CurrentTrend.Direction && price > peiExit.Max))
 					{
 						var reason = string.Format("止盈: 交易价{0}跌破{1}天{2}{3}",
 							price,
 							peiExit.Peroid,
-							CurrentTrend.Direction ? "最低价" : "最高价",
-							CurrentTrend.Direction ? peiExit.Min : peiExit.Max);
+							test.CurrentTrend.Direction ? "最低价" : "最高价",
+							test.CurrentTrend.Direction ? peiExit.Min : peiExit.Max);
 
 						//	清仓
 						return SimulateExit(test, date, price, reason);
@@ -640,28 +647,28 @@ namespace Tast.BusinessLogic.TradingSystem
 			try
 			{
 				//	所有持仓退出
-				CurrentHoldings.ForEach(holding =>
+				test.CurrentHoldings.ForEach(holding =>
 				{
 					holding.EndDate = date;
 					holding.EndPrice = price;
-					holding.Profit = CurrentTrend.Direction ? (holding.EndPrice - holding.StartPrice) * holding.Quantity : (holding.StartPrice - holding.EndPrice) * holding.Quantity;
+					holding.Profit = test.CurrentTrend.Direction ? (holding.EndPrice - holding.StartPrice) * holding.Quantity : (holding.StartPrice - holding.EndPrice) * holding.Quantity;
 				});
 
 				//	趋势结束
-				CurrentTrend.EndReason = reason;
-				CurrentTrend.EndDate = date;
-				CurrentTrend.EndPrice = price;
-				CurrentTrend.MaxHolding = CurrentHoldings.Count;
-				CurrentTrend.Profit = CurrentHoldings.Sum(holding => holding.Profit);
+				test.CurrentTrend.EndReason = reason;
+				test.CurrentTrend.EndDate = date;
+				test.CurrentTrend.EndPrice = price;
+				test.CurrentTrend.MaxHolding = test.CurrentHoldings.Count;
+				test.CurrentTrend.Profit = test.CurrentHoldings.Sum(holding => holding.Profit);
 
 				//	资金变化 = 原始资金 + 利润 - 手续费
-				test.EndAmount += CurrentTrend.Profit - CurrentHoldings.Count * test.Commission * 2;
+				test.EndAmount += test.CurrentTrend.Profit - test.CurrentHoldings.Count * test.Commission * 2;
 
-				TestTrends.Add(CurrentTrend);
-				TestHoldings.AddRange(CurrentHoldings);
+				test.Trends.Add(test.CurrentTrend);
+				test.Holdings.AddRange(test.CurrentHoldings);
 
-				CurrentTrend = null;
-				CurrentHoldings.Clear();
+				test.CurrentTrend = null;
+				test.CurrentHoldings.Clear();
 			}
 			catch (Exception ex)
 			{
