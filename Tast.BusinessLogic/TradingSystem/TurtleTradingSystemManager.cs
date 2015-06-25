@@ -3,11 +3,11 @@ using NLog;
 using nZAI.Database;
 using System;
 using System.Collections.Generic;
-using System.Data.Common;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using Tast.BusinessLogic.Index;
+using Tast.BusinessLogic.Stock;
 using Tast.Entities;
 using Tast.Entities.Index;
 using Tast.Entities.Stock;
@@ -32,6 +32,10 @@ namespace Tast.BusinessLogic.TradingSystem
 			try
 			{
 				logger.Info("海龟交易系统初始化开始");
+
+				var result = StockHistoryManager.RefreshAllStockHistory();
+				if (!result.Success)
+					throw new Exception("更新股票历史信息失败");
 
 				var systems = DBO.Query<TurtleTradingSystem>("SELECT * FROM TurtleTradingSystem WHERE Enable = 1 ORDER BY Code");
 				if (systems == null || systems.Count == 0)
@@ -75,9 +79,9 @@ namespace Tast.BusinessLogic.TradingSystem
 				{
 					SystemId = Guid.NewGuid().ToString("N"),
 					Code = "AAPL",
-					StartAmount = 100000m,
+					StartAmount = 10000m,
 					Commission = 7,
-					StartDate = "20120101",
+					StartDate = "20060101",
 					EndDate = "20141231",
 					StartHolding = 2,
 					StartN = 2,
@@ -110,17 +114,11 @@ namespace Tast.BusinessLogic.TradingSystem
 					RemainTips = string.Empty
 				};
 
-				//	获取这一区间段的股票历史记录数
-				var historyCount = DBO.QueryScalar<long>("SELECT COUNT(0) FROM StockHistory WHERE Code = @Code AND Date >= @StartDate AND Date <= @EndDate",
-					new MySqlParameter("@Code", result.Code),
-					new MySqlParameter("@StartDate", result.StartDate),
-					new MySqlParameter("@EndDate", result.EndDate));
-
 				result.TotalAmount = (result.EndHolding - result.StartHolding + 1) *
 					(result.EndN - result.StartN + 1) *
 					(result.EndEnter - result.StartEnter + 1) *
-					(result.EndStop - result.StartStop + 1) *
-					historyCount;
+					(result.EndExit - result.StartExit + 1) *
+					(result.EndStop - result.StartStop + 1);
 
 				//	保存
 				DBO.Insert<TurtleTradingSystem>(result);
@@ -234,13 +232,16 @@ namespace Tast.BusinessLogic.TradingSystem
 
 							if (system.FinishedAmount % 10240 == 0)
 							{
+								sw.Stop();
 								var elapsedSeconds = sw.Elapsed.TotalSeconds + system.PassedSeconds;
 								var totalSeconds = elapsedSeconds * ((double)system.TotalAmount / system.FinishedAmount);
 								var remainSeconds = totalSeconds - elapsedSeconds;
 								var ts = TimeSpan.FromSeconds(remainSeconds);
 
-								system.RemainTips = string.Format("剩余{0}天{1}小时{2}分钟{3}秒", ts.Days, ts.Hours, ts.Minutes, ts.Seconds);
+								system.PassedSeconds = (long)elapsedSeconds;
+								system.RemainTips = string.Format("速度:{0} tests/s, 剩余{1}天{2}小时{3}分钟{4}秒",(int)(system.FinishedAmount / elapsedSeconds), ts.Days, ts.Hours, ts.Minutes, ts.Seconds);
 
+								sw.Restart();
 								update = true;
 							}
 
@@ -254,7 +255,8 @@ namespace Tast.BusinessLogic.TradingSystem
 					});
 				}
 
-				logger.Info("演算结束");
+				sw.Stop();
+				logger.Info("演算结束,耗时{0}天{1}小时{2}分{3}秒", sw.Elapsed.Days, sw.Elapsed.Hours, sw.Elapsed.Minutes, sw.Elapsed.Seconds);
 			}
 			catch (Exception ex)
 			{
@@ -368,14 +370,15 @@ namespace Tast.BusinessLogic.TradingSystem
 			system.CurrentN = Increase(system.CurrentN, system.StartN, system.EndN, out carry);
 			if (!carry) return true;
 
-			//system.CurrentHolding = Increase(system.CurrentHolding, system.StartHolding, system.EndHolding, out carry);
-			//if (!carry) return true;
-
 			system.CurrentExit = Increase(system.CurrentExit, system.StartExit, system.EndExit, out carry);
 			if (!carry) return true;
 
 			system.CurrentEnter = Increase(system.CurrentEnter, system.StartEnter, system.EndEnter, out carry);
 			if (!carry) return true;
+
+			//	holding在并行计算中迭代
+			//system.CurrentHolding = Increase(system.CurrentHolding, system.StartHolding, system.EndHolding, out carry);
+			//if (!carry) return true;
 
 			return false;
 		}
@@ -421,21 +424,8 @@ namespace Tast.BusinessLogic.TradingSystem
 				result = Result.OK;
 				foreach (var history in histories)
 				{
-					//if (!ti.ContainsKey(history.PrevDate))
-					//	throw new Exception("ti:" + history.PrevDate);
-
-					//if (!pein.ContainsKey(history.PrevDate))
-					//	throw new Exception("pein:" + history.PrevDate);
-
-					//if (!peix.ContainsKey(history.PrevDate))
-					//	throw new Exception("peix:" + history.PrevDate);
-
 					//	模拟
-					result = SimulateDay(test,
-						history,
-						ti[history.PrevDate],
-						pein[history.PrevDate],
-						peix[history.PrevDate]);
+					result = SimulateDay(test, history, ti[history.PrevDate], pein[history.PrevDate], peix[history.PrevDate]);
 					if (!result.Success)
 						throw new Exception(string.Format("海龟交易系统模拟失败, Date:{0} Holding:{1} N:{2} Enter:{3} Exit:{4} Stop:{5}。错误:", history.Date, test.Holding, test.N, test.Enter, test.Exit, test.Stop));
 				}
@@ -465,7 +455,6 @@ namespace Tast.BusinessLogic.TradingSystem
 
 			return result;
 		}
-
 
 		/// <summary>
 		/// 演算
